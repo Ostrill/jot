@@ -651,12 +651,14 @@ final class SliderMenuItemView: NSView {
 
 final class GlassEditorView: NSView {
     enum TitleBarLayout {
-        static let topInset: CGFloat = 15.0
-        static let leadingInset: CGFloat = 14.0
         static let buttonSpacing: CGFloat = 6.0
         static let trailingInset: CGFloat = 22.0
         static let editorTopInset: CGFloat = 46.0
         static let titleGapAfterButtons: CGFloat = 90.0
+        // Titlebar height. A transparent accessory of this height makes AppKit
+        // lay the traffic lights out lower (clearing the big rounded corner)
+        // while keeping their hover tracking intact. Tweak to taste.
+        static let titlebarHeight: CGFloat = 44.0
     }
 
     var settings = PanelSettings() {
@@ -1255,20 +1257,23 @@ final class GlassEditorView: NSView {
 
     private func titleBarMetrics() -> (statusOriginY: CGFloat, leadingReserve: CGFloat, editorTopInset: CGFloat) {
         guard let window,
-              let closeButton = window.standardWindowButton(.closeButton) else {
+              let closeButton = window.standardWindowButton(.closeButton),
+              let buttonSuperview = closeButton.superview else {
             let fallbackTopInset = max(safeAreaInsets.top + 10.0, 46.0)
             return (bounds.height - fallbackTopInset + 8.0, 110.0, fallbackTopInset)
         }
 
-        let buttonHeight = closeButton.frame.height
-        let buttonWidth = closeButton.frame.width
-        let buttonOriginY = bounds.height - buttonHeight - TitleBarLayout.topInset
-        let buttonCenterY = buttonOriginY + (buttonHeight / 2.0)
-        let buttonsWidth = (buttonWidth * 3.0) + (TitleBarLayout.buttonSpacing * 2.0)
-        let leadingReserve = TitleBarLayout.leadingInset + buttonsWidth + TitleBarLayout.titleGapAfterButtons
+        // Read where AppKit actually placed the traffic lights (in window/content
+        // coordinates — the content view fills the window with fullSizeContentView)
+        // so the status block and editor inset follow the buttons automatically.
+        let buttonFrame = buttonSuperview.convert(closeButton.frame, to: nil)
+        let buttonCenterY = buttonFrame.midY
+        let buttonsWidth = (buttonFrame.width * 3.0) + (TitleBarLayout.buttonSpacing * 2.0)
+        let leadingReserve = buttonFrame.minX + buttonsWidth + TitleBarLayout.titleGapAfterButtons
         let statusHeight = fileStatusStack.fittingSize.height
         let statusOriginY = buttonCenterY - (statusHeight / 2.0)
-        return (statusOriginY, leadingReserve, TitleBarLayout.editorTopInset)
+        let editorTopInset = max(TitleBarLayout.editorTopInset, bounds.height - buttonFrame.minY + 12.0)
+        return (statusOriginY, leadingReserve, editorTopInset)
     }
 }
 
@@ -1755,7 +1760,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         newWindow.level = settings.alwaysOnTop ? .floating : .normal
         newWindow.representedURL = currentFileURL
         newWindow.contentView = editorView
+        installTitlebarSpacer(in: newWindow)
         return newWindow
+    }
+
+    // A transparent, tall titlebar accessory raises the titlebar height so
+    // AppKit positions the traffic lights lower by itself — keeping their
+    // hover symbols working (manual repositioning broke the hover tracking).
+    private func installTitlebarSpacer(in window: NSWindow) {
+        let accessory = NSTitlebarAccessoryViewController()
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            spacer.heightAnchor.constraint(equalToConstant: GlassEditorView.TitleBarLayout.titlebarHeight),
+            spacer.widthAnchor.constraint(equalToConstant: 1.0)
+        ])
+        accessory.view = spacer
+        accessory.layoutAttribute = .right
+        window.addTitlebarAccessoryViewController(accessory)
     }
 
     private func setupFormatMenu() {
@@ -2039,22 +2061,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         positionTrafficLights()
     }
 
+    // Traffic lights are positioned by AppKit (via the tall titlebar accessory);
+    // we only need to re-flow the status block, which tracks their position.
     private func positionTrafficLights() {
-        guard let close = window.standardWindowButton(.closeButton),
-              let mini = window.standardWindowButton(.miniaturizeButton),
-              let zoom = window.standardWindowButton(.zoomButton),
-              let container = close.superview else {
-            return
-        }
-
-        let topInset: CGFloat = GlassEditorView.TitleBarLayout.topInset
-        let leadingInset: CGFloat = GlassEditorView.TitleBarLayout.leadingInset
-        let spacing: CGFloat = GlassEditorView.TitleBarLayout.buttonSpacing
-        let y = container.bounds.height - close.frame.height - topInset
-
-        close.setFrameOrigin(NSPoint(x: leadingInset, y: y))
-        mini.setFrameOrigin(NSPoint(x: close.frame.maxX + spacing, y: y))
-        zoom.setFrameOrigin(NSPoint(x: mini.frame.maxX + spacing, y: y))
+        editorView.needsLayout = true
     }
 
     private func applySettings() {

@@ -379,9 +379,19 @@ wrapGuideRounded     = true
 
 ## 15. Traffic lights
 
-Кнопки (close/minimize/zoom) позиционируются вручную в `positionTrafficLights()`. Вызывается при: старте, resize, fullscreen enter/exit, смене edited state, после close/save panel.
+Кнопки (close/minimize/zoom) **позиционирует сам AppKit**. Чтобы они сидели ниже (большое скругление угла, radius 30, иначе кнопки некрасиво близко к закруглению), титлбар сделан выше через прозрачный titlebar-accessory высотой `TitleBarLayout.titlebarHeight` (44) в `installTitlebarSpacer(in:)`.
 
-Это хрупкое место — AppKit сам пытается управлять titlebar geometry при `fullSizeContentView`.
+### Почему так, а не ручной сдвиг
+
+Раньше кнопки двигались вручную через `setFrameOrigin`. Это ломало hover: символы (×/−/+) рисует родительский `NSThemeFrame` по своей tracking-зоне, которая оставалась на дефолтном месте → наведение не попадало, символы мерцали. Поднятие титлбара через accessory заставляет AppKit самому опустить кнопки **вместе с tracking-зоной** → hover работает.
+
+`positionTrafficLights()` теперь не двигает кнопки, а только дёргает `editorView.needsLayout` (статус-блок справа сверху следует за фактической позицией кнопок).
+
+`titleBarMetrics()` читает **фактический** фрейм close-кнопки (`buttonSuperview.convert(...)`), поэтому позиция статуса и верхний отступ редактора подстраиваются автоматически под то, куда AppKit поставил кнопки.
+
+### Тонкая настройка
+
+Горизонтальный отступ кнопок задаёт AppKit (публично не меняется til-в-пиксель). Вертикаль регулируется `titlebarHeight`. Если кнопки сидят слишком высоко/низко — менять только эту константу.
 
 ---
 
