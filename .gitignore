@@ -1,0 +1,30 @@
+# ─── macOS ───────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ─── Local tooling / agent config ────────────────────────
+.claude/
+
+# ─── App bundle: track only Info.plist, ignore build output ─
+# (binary, generated icons and code signature are produced by rebuild.sh)
+/Jot.app/*
+!/Jot.app/Contents/
+/Jot.app/Contents/*
+!/Jot.app/Contents/Info.plist
+
+# ─── Icon build pipeline (regenerated from icon.png) ─────
+/build_icon/
+
+# ─── Auxiliary tooling — will be added to the repo later ──
+/icon_picker/
+/IconPicker.app/
+
+# ─── Icon experiments archive (scratch) ──────────────────
+/icons/
+
+# ─── Early experiment notes (scratch) ────────────────────
+/task.md
+
+# ─── Compiled Swift artifacts ────────────────────────────
+*.o
+*.swiftmodule
