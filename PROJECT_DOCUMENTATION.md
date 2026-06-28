@@ -53,9 +53,14 @@ IconPicker.app/                 ← утилита подбора фона ик�
 
 ### 3.1. Быстрая компиляция бинарника
 
+Бинарник компилируется из `main.swift` **вместе с вшитыми исходниками SwiftMath** (см. раздел 23). В zsh:
+
 ```bash
-xcrun swiftc main.swift -o Jot.app/Contents/MacOS/GlassPanel
+swiftmath_sources=(SwiftMath/**/*.swift)
+xcrun swiftc main.swift "${swiftmath_sources[@]}" -o Jot.app/Contents/MacOS/GlassPanel
 ```
+
+Проще использовать `./rebuild.sh` — он делает это плюс копирует шрифты SwiftMath в Resources.
 
 ### 3.2. Пересборка с новой иконкой
 
@@ -477,3 +482,38 @@ wrapGuideRounded     = true
 | Непрозрачный icns (#000F18 фон) | Прозрачная иконка невидима на белом фоне Finder |
 | NSApp.applicationIconImage не устанавливается при старте | Обход системного рендеринга (squircle, shadow) |
 | Dock icon: 80% scale + squircle clip | Системный рендеринг бандла имеет неявный паддинг/масштаб |
+
+---
+
+## 23. SwiftMath: рендеринг LaTeX-формул
+
+### 23.1. Что это и зачем
+
+[SwiftMath](https://github.com/mgriebling/SwiftMath) — нативная библиотека рендеринга LaTeX-математики через CoreText (порт iosMath). Выбрана вместо KaTeX/WebKit потому что даёт **синхронный** рендер прямо в `NSImage`, что нужно для инлайн-вставки формул в текст без async-снимков webview.
+
+Цель — реализовать инлайн-формулы: ввод `$$...$$`, живой предпросмотр в стеклянной панели, сворачивание в отрендеренную формулу. **На текущем этапе SwiftMath только вшит и подключён к сборке — UX формул ещё не реализован.**
+
+### 23.2. Как вшита
+
+- Исходники (28 .swift файлов) лежат в `SwiftMath/` — компилируются вместе с `main.swift`.
+- `SwiftMath/BundleModuleShim.swift` — определяет `Bundle.module` → `Bundle.main`. SwiftMath написан как SPM-пакет и грузит шрифты через `Bundle.module`, которого нет при сборке через `swiftc`. Shim перенаправляет на main bundle.
+- Шрифт-мастер: `SwiftMath/mathFonts.bundle/` — только дефолтный `latinmodern-math.otf` + `.plist` (из 12 доступных шрифтов взят один, чтобы не тащить 7 МБ). Билд-скрипты копируют его в `Jot.app/Contents/Resources/mathFonts.bundle`.
+
+### 23.3. Минимальный пример рендера
+
+```swift
+let mathImage = MTMathImage(latex: "x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}",
+                            fontSize: 30, textColor: .white, labelMode: .display)
+let (error, image) = mathImage.asImage()   // image: NSImage?
+```
+
+### 23.4. Подводные камни
+
+- Минимальная версия macOS у SwiftMath — 12.0 (в `Info.plist` сейчас стоит 11.0; для распространения учесть).
+- Если понадобится другой шрифт — добавить его `.otf` + `.plist` в `SwiftMath/mathFonts.bundle/`.
+- Предупреждения о deprecated `CTFontManagerRegisterGraphicsFont` (macOS 15) — не критичны, работают.
+- Шрифт грузится лениво и кешируется (`BundleManager`). Первый рендер чуть медленнее.
+
+### 23.5. Лицензия
+
+SwiftMath — MIT (см. `SwiftMath/LICENSE`). Шрифт latinmodern-math — OFL (см. `SwiftMath/mathFonts.bundle/OFL.txt`).

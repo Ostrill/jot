@@ -39,9 +39,14 @@ iconutil --convert icns --output "$RES_PATH/AppIcon.icns" "$ICONSET"
 cp -f "$RES_PATH/AppIcon.icns" "$RES_PATH/icon.icns"
 cp -f icon.png "$RES_PATH/BaseIcon.png"
 
+echo "→ bundling SwiftMath fonts"
+rm -rf "$RES_PATH/mathFonts.bundle"
+cp -R SwiftMath/mathFonts.bundle "$RES_PATH/mathFonts.bundle"
+
 echo "→ compiling binary"
 mkdir -p "$(dirname "$BIN_PATH")"
-xcrun swiftc main.swift -o "$BIN_PATH"
+swiftmath_sources=(SwiftMath/**/*.swift)
+xcrun swiftc main.swift "${swiftmath_sources[@]}" -o "$BIN_PATH"
 
 echo "→ signing"
 xattr -rc "$APP_PATH"
