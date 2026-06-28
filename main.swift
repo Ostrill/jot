@@ -340,7 +340,18 @@ final class HitTestShieldView: NSView {
     }
 }
 
+/// Implemented by GlassEditorView to drive inline LaTeX editing from key events.
+protocol MathEditingHost: AnyObject {
+    var isEditingMath: Bool { get }
+    func mathCaretAtFormulaEnd() -> Bool
+    func mathCaretAtFormulaStart() -> Bool
+    func mathCommit()
+    func mathCancel()
+}
+
 final class EditorTextView: NSTextView {
+    weak var mathHost: MathEditingHost?
+
     private enum KeyCode {
         static let a: UInt16 = 0
         static let z: UInt16 = 6
@@ -396,6 +407,115 @@ final class EditorTextView: NSTextView {
             }
         }
         return became
+    }
+
+    // Enter / arrow keys drive the formula edit lifecycle (commit / cancel).
+    override func insertNewline(_ sender: Any?) {
+        if let host = mathHost, host.isEditingMath {
+            host.mathCommit()
+            return
+        }
+        super.insertNewline(sender)
+    }
+
+    override func moveRight(_ sender: Any?) {
+        if let host = mathHost, host.isEditingMath, host.mathCaretAtFormulaEnd() {
+            host.mathCommit()
+            return
+        }
+        super.moveRight(sender)
+    }
+
+    override func moveLeft(_ sender: Any?) {
+        if let host = mathHost, host.isEditingMath, host.mathCaretAtFormulaStart() {
+            host.mathCancel()
+        }
+        super.moveLeft(sender)
+    }
+}
+
+// MARK: - Inline LaTeX math rendering
+
+enum MathRenderer {
+    /// Renders a LaTeX string to an NSImage via SwiftMath. Returns nil on
+    /// empty input or parse error.
+    static func renderImage(latex: String, fontSize: CGFloat, color: NSColor) -> NSImage? {
+        let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let mathImage = MTMathImage(latex: trimmed, fontSize: fontSize, textColor: color, labelMode: .display)
+        let (error, image) = mathImage.asImage()
+        guard error == nil, let image else { return nil }
+        return image
+    }
+}
+
+/// A rendered formula embedded inline in the text. Stores its LaTeX source so
+/// it can be expanded back into an editable `$$…` span and serialized on save.
+final class MathAttachment: NSTextAttachment {
+    let latex: String
+    private let verticalOffset: CGFloat
+    private let renderedSize: NSSize
+
+    init(latex: String, image: NSImage, font: NSFont) {
+        self.latex = latex
+        self.renderedSize = image.size
+        // Center the formula image vertically on the text's mid-line.
+        let fontMid = (font.ascender + font.descender) / 2.0
+        self.verticalOffset = fontMid - (image.size.height / 2.0)
+        super.init(data: nil, ofType: nil)
+        self.image = image
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect, glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
+        CGRect(x: 0, y: verticalOffset, width: renderedSize.width, height: renderedSize.height)
+    }
+}
+
+/// Floating glass panel that shows the live-rendered formula while editing.
+final class MathPreviewView: NSView {
+    private let glass = NSGlassEffectView(frame: .zero)
+    private let imageView = NSImageView(frame: .zero)
+    private let padding: CGFloat = 14.0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        glass.cornerRadius = 14.0
+        addSubview(glass)
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.imageAlignment = .alignCenter
+        addSubview(imageView)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { false }
+
+    override func layout() {
+        super.layout()
+        glass.frame = bounds
+        imageView.frame = bounds.insetBy(dx: padding, dy: padding)
+    }
+
+    func setImage(_ image: NSImage?) {
+        imageView.image = image
+    }
+
+    func contentSize(for image: NSImage?) -> NSSize {
+        guard let image, image.size.width > 1 else {
+            return NSSize(width: 96.0, height: 46.0)
+        }
+        let maxWidth: CGFloat = 360.0
+        var w = image.size.width
+        var h = image.size.height
+        if w > maxWidth {
+            let scale = maxWidth / w
+            w *= scale
+            h *= scale
+        }
+        return NSSize(width: w + padding * 2.0, height: h + padding * 2.0)
     }
 }
 
@@ -552,9 +672,21 @@ final class GlassEditorView: NSView {
     private var currentFilePath: String?
     private var fileIsEdited = false
 
+    // Inline LaTeX editing state.
+    private let mathPreview = MathPreviewView(frame: .zero)
+    private var mathEditRange: NSRange?        // source span "$$…" being edited
+    private var isProcessingMath = false       // re-entrancy guard for programmatic edits
+
+    private var editorFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: settings.editorFontSize, weight: .regular)
+    }
+    private var inlineMathColor: NSColor {
+        NSColor(calibratedWhite: 1.0, alpha: 0.92)
+    }
+
     var text: String {
-        get { editorTextView.string }
-        set { editorTextView.string = newValue }
+        get { serializedText() }
+        set { setText(newValue) }
     }
 
     var selectedRange: NSRange {
@@ -749,6 +881,7 @@ final class GlassEditorView: NSView {
         editorContentView.addSubview(wrapGuideView)
         editorContentView.addSubview(backdropTextView)
         editorContentView.addSubview(editorTextView)
+        editorTextView.mathHost = self
 
         editorScrollView.documentView = editorContentView
         contentHost.addSubview(editorScrollView)
@@ -772,6 +905,9 @@ final class GlassEditorView: NSView {
         fileStatusStack.addArrangedSubview(fileNameField)
         fileStatusStack.isHidden = true
         contentHost.addSubview(fileStatusStack)
+
+        mathPreview.isHidden = true
+        contentHost.addSubview(mathPreview)
     }
 
     private func applySettings() {
@@ -845,9 +981,65 @@ final class GlassEditorView: NSView {
     }
 
     func setText(_ text: String) {
-        editorTextView.string = text
-        backdropTextView.string = text
+        let attributed = attributedStringRenderingFormulas(from: text)
+        editorTextView.textStorage?.setAttributedString(attributed)
+        backdropTextView.string = editorTextView.string
+        mathEditRange = nil
+        hideMathPreview()
         syncEditorLayout()
+    }
+
+    /// Serializes the document, turning rendered formula attachments back into
+    /// `$$latex$$` source so files round-trip and stay editable elsewhere.
+    private func serializedText() -> String {
+        guard let storage = editorTextView.textStorage else { return editorTextView.string }
+        let result = NSMutableString()
+        let full = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.attachment, in: full, options: []) { value, range, _ in
+            if let att = value as? MathAttachment {
+                result.append("$$\(att.latex)$$")
+            } else {
+                result.append((storage.string as NSString).substring(with: range))
+            }
+        }
+        return result as String
+    }
+
+    /// Parses `$$…$$` spans in plain text into rendered formula attachments.
+    private func attributedStringRenderingFormulas(from text: String) -> NSAttributedString {
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: editorFont,
+            .foregroundColor: settings.editorTextColor
+        ]
+        let result = NSMutableAttributedString()
+        let ns = text as NSString
+        var i = 0
+        while i < ns.length {
+            let open = ns.range(of: "$$", range: NSRange(location: i, length: ns.length - i))
+            if open.location == NSNotFound {
+                result.append(NSAttributedString(string: ns.substring(from: i), attributes: baseAttrs))
+                break
+            }
+            if open.location > i {
+                result.append(NSAttributedString(string: ns.substring(with: NSRange(location: i, length: open.location - i)), attributes: baseAttrs))
+            }
+            let afterOpen = open.location + 2
+            let close = ns.range(of: "$$", range: NSRange(location: afterOpen, length: ns.length - afterOpen))
+            if close.location == NSNotFound {
+                result.append(NSAttributedString(string: ns.substring(from: open.location), attributes: baseAttrs))
+                break
+            }
+            let latex = ns.substring(with: NSRange(location: afterOpen, length: close.location - afterOpen))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !latex.isEmpty,
+               let image = MathRenderer.renderImage(latex: latex, fontSize: settings.editorFontSize, color: inlineMathColor) {
+                result.append(NSAttributedString(attachment: MathAttachment(latex: latex, image: image, font: editorFont)))
+            } else {
+                result.append(NSAttributedString(string: ns.substring(with: NSRange(location: open.location, length: close.location + 2 - open.location)), attributes: baseAttrs))
+            }
+            i = close.location + 2
+        }
+        return result
     }
 
     func rebuildEditorTextView() {
@@ -1070,7 +1262,194 @@ extension GlassEditorView: NSTextViewDelegate {
             backdropTextView.string = editorTextView.string
         }
         syncEditorLayout()
+        handleMathAfterTextChange()
         onTextDidChange?()
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !isProcessingMath else { return }
+        let sel = editorTextView.selectedRange()
+
+        // Caret moved onto a rendered formula → expand it for editing.
+        if mathEditRange == nil, let attRange = mathAttachmentRange(near: sel) {
+            expandMathAttachment(at: attRange)
+            return
+        }
+
+        // While editing, react to the caret leaving the formula span.
+        guard let r = mathEditRange else { return }
+        let caret = sel.location
+        let formulaEnd = r.location + r.length
+        if sel.length == 0 && caret >= r.location && caret <= formulaEnd {
+            updateMathPreview()
+        } else if caret <= r.location {
+            cancelMathEditing()
+        } else {
+            mathCommit()
+        }
+    }
+
+    // Keeps the tracked formula range in sync with edits inside it.
+    func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard !isProcessingMath, let r = mathEditRange else { return true }
+        let replLen = (replacementString as NSString?)?.length ?? 0
+        let delta = replLen - affectedCharRange.length
+        let formulaEnd = r.location + r.length
+        if affectedCharRange.location >= r.location && affectedCharRange.location + affectedCharRange.length <= formulaEnd {
+            mathEditRange = NSRange(location: r.location, length: max(0, r.length + delta))
+        } else {
+            // Edit outside the formula → stop tracking (leaves source as plain text).
+            cancelMathEditing()
+        }
+        return true
+    }
+}
+
+// MARK: - Inline LaTeX editing logic
+
+extension GlassEditorView: MathEditingHost {
+    var isEditingMath: Bool { mathEditRange != nil }
+
+    func mathCaretAtFormulaEnd() -> Bool {
+        guard let r = mathEditRange else { return false }
+        return editorTextView.selectedRange().location >= r.location + r.length
+    }
+
+    func mathCaretAtFormulaStart() -> Bool {
+        guard let r = mathEditRange else { return false }
+        return editorTextView.selectedRange().location <= r.location + 2
+    }
+
+    func mathCommit() {
+        guard let r = mathEditRange else { return }
+        let latex = currentMathLatex().trimmingCharacters(in: .whitespacesAndNewlines)
+        mathEditRange = nil
+        hideMathPreview()
+        guard !latex.isEmpty,
+              let image = MathRenderer.renderImage(latex: latex, fontSize: settings.editorFontSize, color: inlineMathColor),
+              let storage = editorTextView.textStorage,
+              r.location + r.length <= storage.length else {
+            return  // invalid/empty → leave the raw "$$…" source in place
+        }
+        isProcessingMath = true
+        let attStr = NSMutableAttributedString(attachment: MathAttachment(latex: latex, image: image, font: editorFont))
+        attStr.addAttributes([.font: editorFont], range: NSRange(location: 0, length: attStr.length))
+        storage.replaceCharacters(in: r, with: attStr)
+        editorTextView.setSelectedRange(NSRange(location: r.location + attStr.length, length: 0))
+        isProcessingMath = false
+        syncTextLayersAndLayout()
+    }
+
+    func mathCancel() {
+        guard mathEditRange != nil else { return }
+        cancelMathEditing()
+    }
+
+    // MARK: Internal helpers
+
+    private func cancelMathEditing() {
+        mathEditRange = nil
+        hideMathPreview()
+    }
+
+    private func handleMathAfterTextChange() {
+        guard !isProcessingMath else { return }
+        let ns = editorTextView.string as NSString
+        let caret = editorTextView.selectedRange().location
+
+        if let r = mathEditRange {
+            // Cancel if the opening "$$" was broken by edits.
+            if r.length < 2 || r.location + 2 > ns.length ||
+                ns.substring(with: NSRange(location: r.location, length: 2)) != "$$" {
+                cancelMathEditing()
+                return
+            }
+            updateMathPreview()
+        } else if caret >= 2,
+                  ns.substring(with: NSRange(location: caret - 2, length: 2)) == "$$" {
+            // "$$" just completed → enter formula editing mode.
+            mathEditRange = NSRange(location: caret - 2, length: 2)
+            updateMathPreview()
+        }
+    }
+
+    private func currentMathLatex() -> String {
+        guard let r = mathEditRange else { return "" }
+        let ns = editorTextView.string as NSString
+        guard r.length >= 2, r.location + r.length <= ns.length else { return "" }
+        return ns.substring(with: NSRange(location: r.location + 2, length: r.length - 2))
+    }
+
+    private func mathAttachmentRange(near sel: NSRange) -> NSRange? {
+        guard let storage = editorTextView.textStorage else { return nil }
+        var indices: [Int] = []
+        if sel.length == 1 { indices.append(sel.location) }
+        if sel.length == 0 { indices.append(sel.location) }   // char to the right of caret
+        for idx in indices where idx >= 0 && idx < storage.length {
+            if storage.attribute(.attachment, at: idx, effectiveRange: nil) is MathAttachment {
+                return NSRange(location: idx, length: 1)
+            }
+        }
+        return nil
+    }
+
+    private func expandMathAttachment(at range: NSRange) {
+        guard let storage = editorTextView.textStorage,
+              let att = storage.attribute(.attachment, at: range.location, effectiveRange: nil) as? MathAttachment else { return }
+        isProcessingMath = true
+        let source = "$$\(att.latex)"
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: source, attributes: [
+            .font: editorFont,
+            .foregroundColor: settings.editorTextColor
+        ]))
+        let newRange = NSRange(location: range.location, length: (source as NSString).length)
+        mathEditRange = newRange
+        editorTextView.setSelectedRange(NSRange(location: newRange.location + newRange.length, length: 0))
+        isProcessingMath = false
+        syncTextLayersAndLayout()
+        updateMathPreview()
+    }
+
+    private func updateMathPreview() {
+        guard let r = mathEditRange else { hideMathPreview(); return }
+        let latex = currentMathLatex().trimmingCharacters(in: .whitespacesAndNewlines)
+        let image = latex.isEmpty ? nil
+            : MathRenderer.renderImage(latex: latex, fontSize: max(settings.editorFontSize + 6.0, 22.0), color: .white)
+        mathPreview.setImage(image)
+        let size = mathPreview.contentSize(for: image)
+        positionMathPreview(belowFormulaRange: r, size: size)
+        mathPreview.isHidden = false
+    }
+
+    private func hideMathPreview() {
+        mathPreview.isHidden = true
+        mathPreview.setImage(nil)
+    }
+
+    private func positionMathPreview(belowFormulaRange r: NSRange, size: NSSize) {
+        guard let lm = editorTextView.layoutManager, let tc = editorTextView.textContainer else { return }
+        let glyphRange = lm.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
+        var rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+        let origin = editorTextView.textContainerOrigin
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+        let rectInHost = editorTextView.convert(rect, to: contentHost)
+
+        let area = editorScrollView.frame
+        var x = rectInHost.minX
+        if x + size.width > area.maxX { x = area.maxX - size.width }
+        if x < area.minX { x = area.minX }
+        // contentHost is not flipped (y grows upward) → "below the line" = smaller y.
+        var y = rectInHost.minY - size.height - 8.0
+        if y < area.minY { y = rectInHost.maxY + 8.0 }   // no room below → place above
+        mathPreview.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    private func syncTextLayersAndLayout() {
+        if backdropTextView.string != editorTextView.string {
+            backdropTextView.string = editorTextView.string
+        }
+        syncEditorLayout()
     }
 }
 
