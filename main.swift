@@ -1357,12 +1357,14 @@ extension GlassEditorView: NSTextViewDelegate {
         }
 
         // While editing: keep preview positioned, or commit when the caret leaves.
+        // On commit, hand the new caret spot (e.g. where the user clicked) to
+        // commitMath so it lands there instead of snapping to the formula end.
         let r = mathEditRange!
         let caret = sel.location
         if sel.length == 0 && caret >= r.location && caret <= r.location + r.length {
             updateMathPreview()
         } else {
-            mathCommit()
+            commitMath(preferredCaret: sel.length == 0 ? sel.location : nil)
         }
     }
 
@@ -1415,6 +1417,15 @@ extension GlassEditorView: MathEditingHost {
     }
 
     func mathCommit() {
+        commitMath(preferredCaret: nil)
+    }
+
+    /// Commits the formula being edited into a rendered attachment (or removes an
+    /// empty one). `preferredCaret` is where the caret should end up (e.g. the
+    /// spot the user just clicked); it's remapped across the source→attachment
+    /// length change so navigation lands where intended. nil → just after the
+    /// formula (Enter / arrow-out).
+    private func commitMath(preferredCaret: Int?) {
         guard let r = mathEditRange, let storage = editorTextView.textStorage,
               r.location + r.length <= storage.length else { stopMathEditing(); return }
         let latex = currentMathLatex().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1426,7 +1437,7 @@ extension GlassEditorView: MathEditingHost {
             // Nothing typed → remove the empty "$$$$".
             isProcessingMath = true
             storage.replaceCharacters(in: r, with: "")
-            editorTextView.setSelectedRange(NSRange(location: r.location, length: 0))
+            editorTextView.setSelectedRange(NSRange(location: caretAfterCommit(preferredCaret, range: r, newLength: 0), length: 0))
             isProcessingMath = false
             syncTextLayersAndLayout()
             return
@@ -1437,9 +1448,18 @@ extension GlassEditorView: MathEditingHost {
         isProcessingMath = true
         let attStr = NSAttributedString(attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint))
         storage.replaceCharacters(in: r, with: attStr)
-        editorTextView.setSelectedRange(NSRange(location: r.location + 1, length: 0))
+        editorTextView.setSelectedRange(NSRange(location: caretAfterCommit(preferredCaret, range: r, newLength: 1), length: 0))
         isProcessingMath = false
         syncTextLayersAndLayout()
+    }
+
+    /// Maps a desired caret across the source(len r.length)→attachment(newLength)
+    /// replacement at `r`. nil → just after the committed formula.
+    private func caretAfterCommit(_ preferredCaret: Int?, range r: NSRange, newLength: Int) -> Int {
+        guard let p = preferredCaret else { return r.location + newLength }
+        if p <= r.location { return p }                                       // target before the formula
+        if p >= r.location + r.length { return p + (newLength - r.length) }    // target after → shift by length delta
+        return r.location + newLength                                          // target was inside → land just after
     }
 
     func mathDeleteBackwardAtStart() -> Bool {
