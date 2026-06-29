@@ -708,10 +708,6 @@ final class GlassEditorView: NSView {
         static let trailingInset: CGFloat = 22.0
         static let editorTopInset: CGFloat = 46.0
         static let titleGapAfterButtons: CGFloat = 90.0
-        // Titlebar height. A transparent accessory of this height makes AppKit
-        // lay the traffic lights out lower (clearing the big rounded corner)
-        // while keeping their hover tracking intact. Tweak to taste.
-        static let titlebarHeight: CGFloat = 44.0
     }
 
     var settings = PanelSettings() {
@@ -1851,24 +1847,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         newWindow.level = settings.alwaysOnTop ? .floating : .normal
         newWindow.representedURL = currentFileURL
         newWindow.contentView = editorView
-        installTitlebarSpacer(in: newWindow)
+        installTitlebarToolbar(in: newWindow)
         return newWindow
     }
 
-    // A transparent, tall titlebar accessory raises the titlebar height so
-    // AppKit positions the traffic lights lower by itself — keeping their
-    // hover symbols working (manual repositioning broke the hover tracking).
-    private func installTitlebarSpacer(in window: NSWindow) {
-        let accessory = NSTitlebarAccessoryViewController()
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            spacer.heightAnchor.constraint(equalToConstant: GlassEditorView.TitleBarLayout.titlebarHeight),
-            spacer.widthAnchor.constraint(equalToConstant: 1.0)
-        ])
-        accessory.view = spacer
-        accessory.layoutAttribute = .right
-        window.addTitlebarAccessoryViewController(accessory)
+    // A transparent, empty unified toolbar raises the titlebar height so AppKit
+    // itself lays the traffic lights out lower and more inset — clearing our big
+    // rounded corner while keeping their hover tracking intact (AppKit owns the
+    // positioning). The toolbar shows nothing; our fullSizeContentView glass
+    // covers the titlebar area. (A titlebar *accessory* did NOT grow the titlebar
+    // — measured: it left the buttons at the default 9,9.)
+    private func installTitlebarToolbar(in window: NSWindow) {
+        let toolbar = NSToolbar(identifier: "JotToolbar")
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
     }
 
     private func setupFormatMenu() {
