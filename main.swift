@@ -1589,14 +1589,13 @@ extension GlassEditorView: MathEditingHost {
         mathPreview.setImage(nil)
     }
 
-    /// Tints the editable "$$…$$" source darker + gray so it stands out from text.
+    /// Greys the editable "$$…$$" source so it stands out from the surrounding
+    /// (white-with-accent) text — no background plate, the opaque grey is enough.
     private func applyMathHighlight() {
         guard let storage = editorTextView.textStorage else { return }
         let full = NSRange(location: 0, length: storage.length)
-        storage.removeAttribute(.backgroundColor, range: full)
         storage.addAttribute(.foregroundColor, value: settings.editorTextColor, range: full)
         if let r = mathEditRange, r.location + r.length <= storage.length {
-            storage.addAttribute(.backgroundColor, value: NSColor(calibratedWhite: 0.0, alpha: 0.30), range: r)
             storage.addAttribute(.foregroundColor, value: NSColor(calibratedWhite: 0.72, alpha: 1.0), range: r)
         }
     }
@@ -1604,7 +1603,6 @@ extension GlassEditorView: MathEditingHost {
     private func clearMathHighlight() {
         guard let storage = editorTextView.textStorage else { return }
         let full = NSRange(location: 0, length: storage.length)
-        storage.removeAttribute(.backgroundColor, range: full)
         storage.addAttribute(.foregroundColor, value: settings.editorTextColor, range: full)
     }
 
@@ -1635,7 +1633,6 @@ extension GlassEditorView: MathEditingHost {
               let backStorage = backdropTextView.textStorage else { return }
         let copy = NSMutableAttributedString(attributedString: editorStorage)
         let full = NSRange(location: 0, length: copy.length)
-        copy.removeAttribute(.backgroundColor, range: full)
         // Use the color the backdrop is *currently* showing, not settings.backdropTextColor:
         // during Rainbow the timer animates backdropTextView.textColor every frame but does
         // NOT update editorView.settings (that path is avoided to keep the blink timer alive,
