@@ -445,6 +445,11 @@ final class EditorTextView: NSTextView {
 // MARK: - Inline LaTeX math rendering
 
 enum MathRenderer {
+    /// Transparent margin baked around inline formula images (x = horizontal,
+    /// y = vertical) so neighbouring text and the next line aren't flush against
+    /// the glyphs. Tweak to taste.
+    static let inlinePadding = NSSize(width: 2.0, height: 4.0)
+
     /// Renders a LaTeX string to an NSImage via SwiftMath. Returns nil on
     /// empty input or parse error.
     static func renderImage(latex: String, fontSize: CGFloat, color: NSColor) -> NSImage? {
@@ -455,26 +460,74 @@ enum MathRenderer {
         guard error == nil, let image else { return nil }
         return image
     }
+
+    /// White base image for an inline formula attachment: rendered glyphs plus
+    /// transparent padding. Recolored later to follow the text tint.
+    static func renderInlineBase(latex: String, fontSize: CGFloat) -> NSImage? {
+        renderImage(latex: latex, fontSize: fontSize, color: .white)?
+            .padded(dx: inlinePadding.width, dy: inlinePadding.height)
+    }
+}
+
+extension NSImage {
+    /// Recolors a single-color glyph image to `color`, keeping the shape's alpha.
+    /// Cheap (one offscreen draw, no LaTeX re-layout) so formula tint can follow
+    /// the Rainbow animation without re-running SwiftMath every frame.
+    ///
+    /// Draws the shape first, then fills the color with `.sourceAtop` so the tint
+    /// lands only where the shape is opaque. (Filling the whole rect and masking
+    /// with `.destinationIn` instead left a colored 1px strip on the top/right
+    /// edges where the masking draw under-covered the fractional-size canvas.)
+    func recolored(to color: NSColor) -> NSImage {
+        let result = NSImage(size: size)
+        result.lockFocus()
+        let rect = NSRect(origin: .zero, size: size)
+        draw(in: rect, from: rect, operation: .sourceOver, fraction: 1.0)
+        NSGraphicsContext.current?.compositingOperation = .sourceAtop
+        color.setFill()
+        rect.fill()
+        result.unlockFocus()
+        return result
+    }
+
+    /// Returns a copy with transparent margins (`dx` left/right, `dy` top/bottom)
+    /// so inline formulas aren't flush against neighbouring text and lines.
+    func padded(dx: CGFloat, dy: CGFloat) -> NSImage {
+        let result = NSImage(size: NSSize(width: size.width + dx * 2.0, height: size.height + dy * 2.0))
+        result.lockFocus()
+        draw(in: NSRect(x: dx, y: dy, width: size.width, height: size.height),
+             from: NSRect(origin: .zero, size: size), operation: .sourceOver, fraction: 1.0)
+        result.unlockFocus()
+        return result
+    }
 }
 
 /// A rendered formula embedded inline in the text. Stores its LaTeX source so
-/// it can be expanded back into an editable `$$…` span and serialized on save.
+/// it can be expanded back into an editable `$$…` span and serialized on save,
+/// plus a white base image so its tint can be re-applied cheaply (Rainbow).
 final class MathAttachment: NSTextAttachment {
     let latex: String
+    private let baseImage: NSImage          // white shape, kept for cheap retinting
     private let verticalOffset: CGFloat
     private let renderedSize: NSSize
 
-    init(latex: String, image: NSImage, font: NSFont) {
+    init(latex: String, baseImage: NSImage, font: NSFont, tint: NSColor) {
         self.latex = latex
-        self.renderedSize = image.size
+        self.baseImage = baseImage
+        self.renderedSize = baseImage.size
         // Center the formula image vertically on the text's mid-line.
         let fontMid = (font.ascender + font.descender) / 2.0
-        self.verticalOffset = fontMid - (image.size.height / 2.0)
+        self.verticalOffset = fontMid - (baseImage.size.height / 2.0)
         super.init(data: nil, ofType: nil)
-        self.image = image
+        self.image = baseImage.recolored(to: tint)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Re-tints the rendered image to `color`, preserving size (no relayout).
+    func applyTint(_ color: NSColor) {
+        self.image = baseImage.recolored(to: color)
+    }
 
     override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect, glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
         CGRect(x: 0, y: verticalOffset, width: renderedSize.width, height: renderedSize.height)
@@ -699,9 +752,9 @@ final class GlassEditorView: NSView {
     private var editorFont: NSFont {
         NSFont.monospacedSystemFont(ofSize: settings.editorFontSize, weight: .regular)
     }
-    private var inlineMathColor: NSColor {
-        NSColor(calibratedWhite: 1.0, alpha: 0.92)
-    }
+    /// Current tint for rendered formulas — the composite "white-with-accent-tint"
+    /// color. Kept in sync as Rainbow animates so formulas cycle hue with the text.
+    private var currentFormulaTint: NSColor = NSColor(calibratedWhite: 1.0, alpha: 0.92)
 
     var text: String {
         get { serializedText() }
@@ -970,6 +1023,11 @@ final class GlassEditorView: NSView {
     func applyAnimatedColorUpdate(_ updatedSettings: PanelSettings, refreshEditorTint: Bool) {
         colorLayer.backgroundColor = updatedSettings.accentColor.cgColor
         applyBackdropTextColor(using: updatedSettings)
+        // Formulas are bitmaps, so they can't ride backdropTextView.textColor like
+        // the glyph text — retint them (throttled via refreshEditorTint) so they
+        // cycle hue with Rainbow too. Cheap: cached-image recolor, no re-render.
+        currentFormulaTint = updatedSettings.editorCompositeTextColor
+        if refreshEditorTint { recolorFormulas(to: currentFormulaTint) }
         wrapGuideView.guideColor = updatedSettings.editorCompositeTextColor.withAlphaComponent(
             max(0.0, min(1.0, updatedSettings.wrapGuideOpacity))
         )
@@ -1052,8 +1110,8 @@ final class GlassEditorView: NSView {
             let latex = ns.substring(with: NSRange(location: afterOpen, length: close.location - afterOpen))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !latex.isEmpty,
-               let image = MathRenderer.renderImage(latex: latex, fontSize: settings.editorFontSize, color: inlineMathColor) {
-                result.append(NSAttributedString(attachment: MathAttachment(latex: latex, image: image, font: editorFont)))
+               let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) {
+                result.append(NSAttributedString(attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint)))
             } else {
                 result.append(NSAttributedString(string: ns.substring(with: NSRange(location: open.location, length: close.location + 2 - open.location)), attributes: baseAttrs))
             }
@@ -1122,6 +1180,8 @@ final class GlassEditorView: NSView {
             storage.addAttributes([.font: font, .foregroundColor: appearanceSettings.editorTextColor], range: range)
             storage.endEditing()
         }
+        currentFormulaTint = appearanceSettings.editorCompositeTextColor
+        recolorFormulas(to: currentFormulaTint)
         syncBackdrop()
         applyBackdropTextColor(using: appearanceSettings)
         syncEditorLayout()
@@ -1375,11 +1435,11 @@ extension GlassEditorView: MathEditingHost {
             syncTextLayersAndLayout()
             return
         }
-        guard let image = MathRenderer.renderImage(latex: latex, fontSize: settings.editorFontSize, color: inlineMathColor) else {
+        guard let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) else {
             return  // invalid LaTeX → leave the raw "$$…$$" (re-enterable via click)
         }
         isProcessingMath = true
-        let attStr = NSAttributedString(attachment: MathAttachment(latex: latex, image: image, font: editorFont))
+        let attStr = NSAttributedString(attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint))
         storage.replaceCharacters(in: r, with: attStr)
         editorTextView.setSelectedRange(NSRange(location: r.location + 1, length: 0))
         isProcessingMath = false
@@ -1521,7 +1581,7 @@ extension GlassEditorView: MathEditingHost {
         applyMathHighlight()
         let latex = currentMathLatex().trimmingCharacters(in: .whitespacesAndNewlines)
         let image = latex.isEmpty ? nil
-            : MathRenderer.renderImage(latex: latex, fontSize: max(settings.editorFontSize + 6.0, 22.0), color: .white)
+            : MathRenderer.renderImage(latex: latex, fontSize: max(settings.editorFontSize + 6.0, 22.0), color: currentFormulaTint)
         mathPreview.setImage(image)
         let size = mathPreview.contentSize(for: image)
         positionMathPreview(belowFormulaRange: mathEditRange!, size: size)
@@ -1588,6 +1648,31 @@ extension GlassEditorView: MathEditingHost {
         let backdropColor = backdropTextView.textColor ?? settings.backdropTextColor
         copy.addAttributes([.font: editorFont, .foregroundColor: backdropColor], range: full)
         backStorage.setAttributedString(copy)
+    }
+
+    /// Re-tints every rendered formula to `color` (cheap bitmap retint, no LaTeX
+    /// re-layout) so formulas cycle hue with Rainbow alongside the text. Updates
+    /// both the editor and its backdrop copies, then redraws.
+    private func recolorFormulas(to color: NSColor) {
+        guard let editorStorage = editorTextView.textStorage else { return }
+        let full = NSRange(location: 0, length: editorStorage.length)
+        var tinted: [(NSRange, NSImage)] = []
+        editorStorage.enumerateAttribute(.attachment, in: full, options: []) { value, range, _ in
+            guard let att = value as? MathAttachment else { return }
+            att.applyTint(color)
+            if let img = att.image { tinted.append((range, img)) }
+        }
+        guard !tinted.isEmpty else { return }
+        // The backdrop layer holds attachment copies at the same ranges; point them
+        // at the freshly tinted images so both layers stay in sync (this path does
+        // not call syncBackdrop, to avoid a full backdrop rebuild every tick).
+        if let backStorage = backdropTextView.textStorage {
+            for (range, img) in tinted where NSMaxRange(range) <= backStorage.length {
+                (backStorage.attribute(.attachment, at: range.location, effectiveRange: nil) as? NSTextAttachment)?.image = img
+            }
+        }
+        editorTextView.needsDisplay = true
+        backdropTextView.needsDisplay = true
     }
 
     private func syncTextLayersAndLayout() {
