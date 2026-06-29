@@ -1580,7 +1580,13 @@ extension GlassEditorView: MathEditingHost {
         let copy = NSMutableAttributedString(attributedString: editorStorage)
         let full = NSRange(location: 0, length: copy.length)
         copy.removeAttribute(.backgroundColor, range: full)
-        copy.addAttributes([.font: editorFont, .foregroundColor: settings.backdropTextColor], range: full)
+        // Use the color the backdrop is *currently* showing, not settings.backdropTextColor:
+        // during Rainbow the timer animates backdropTextView.textColor every frame but does
+        // NOT update editorView.settings (that path is avoided to keep the blink timer alive,
+        // see §7). Baking the stale settings color here made the backdrop flash to a frozen
+        // hue for one frame on every keystroke — the returned text-color flicker.
+        let backdropColor = backdropTextView.textColor ?? settings.backdropTextColor
+        copy.addAttributes([.font: editorFont, .foregroundColor: backdropColor], range: full)
         backStorage.setAttributedString(copy)
     }
 
