@@ -895,6 +895,11 @@ final class GlassEditorView: NSView {
             height: statusSize.height
         )
         syncEditorLayout()
+        // Keep the preview under the formula when the window is resized (not only on
+        // keystrokes), so it no longer drifts relative to the window's bottom edge.
+        if let r = mathEditRange, !mathPreview.isHidden {
+            positionMathPreview(belowFormulaRange: r, size: mathPreview.frame.size)
+        }
 
         updateChrome()
     }
@@ -1704,9 +1709,15 @@ extension GlassEditorView: MathEditingHost {
     }
 
     private func positionMathPreview(belowFormulaRange r: NSRange, size: NSSize) {
-        guard let lm = editorTextView.layoutManager, let tc = editorTextView.textContainer else { return }
+        guard let lm = editorTextView.layoutManager, let tc = editorTextView.textContainer,
+              let storage = editorTextView.textStorage, r.location + r.length <= storage.length else { return }
+        // Force layout for the formula's glyphs before measuring: right after a text
+        // mutation the layout may not be ready, and boundingRect would return a zero
+        // rect → the panel jumped to the top-left corner (bug #10).
+        lm.ensureLayout(forCharacterRange: r)
         let glyphRange = lm.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
         var rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+        guard rect.width > 0.5, rect.height > 0.5 else { return }   // not laid out yet → keep last position
         let origin = editorTextView.textContainerOrigin
         rect.origin.x += origin.x
         rect.origin.y += origin.y
