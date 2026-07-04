@@ -18,6 +18,7 @@
 # ─── Auxiliary tooling — will be added to the repo later ──
 /icon_picker/
 /IconPicker.app/
+/icon_render/
 
 # ─── Icon experiments archive (scratch) ──────────────────
 /icons/

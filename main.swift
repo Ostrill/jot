@@ -1802,8 +1802,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var sliderViews: [String: SliderMenuItemView] = [:]
     private var pendingFocusRestore = false
-    private var baseIconForDock: NSImage?
-    private var dockIconTick = 0
     private let ciContext = CIContext()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -2301,17 +2299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         rainbowTimer?.invalidate()
         rainbowTimer = nil
 
-        if baseIconForDock == nil,
-           let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
-            baseIconForDock = NSImage(contentsOf: url)
-        }
-
-        if !settings.rainbowEnabled {
-            // Keep icon tinted at the current (static) hue even without animation.
-            updateDockIcon(hue: settings.rainbowHue)
-            dockIconTick = 0
-            return
-        }
+        if !settings.rainbowEnabled { return }
 
         rainbowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -2326,36 +2314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.lastAnimatedTextHue = self.settings.rainbowHue
             }
             self.sliderViews["rainbowHue"]?.doubleValue = self.settings.rainbowHue * 360.0
-
-            // Dock icon ~5 fps (every 6th tick)
-            self.dockIconTick += 1
-            if self.dockIconTick >= 6 {
-                self.dockIconTick = 0
-                self.updateDockIcon(hue: self.settings.rainbowHue)
-            }
+            // (Dock-icon hue-tinting removed — the app now ships a static icon.
+            //  See memory note jot-dock-icon-tint for the old implementation.)
         }
         RunLoop.main.add(rainbowTimer!, forMode: .common)
-    }
-
-    private func updateDockIcon(hue: CGFloat) {
-        guard let base = baseIconForDock else { return }
-        let canvasSize = NSSize(width: 512, height: 512)
-        let icon = NSImage(size: canvasSize, flipped: false) { rect in
-            let side = rect.width * 0.80
-            let off  = (rect.width - side) / 2
-            let iconRect = NSRect(x: off, y: off, width: side, height: side)
-
-            let r = iconRect.width * 0.225
-            NSBezierPath(roundedRect: iconRect, xRadius: r, yRadius: r).setClip()
-
-            base.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1)
-
-            NSColor(hue: hue, saturation: 0.65, brightness: 1.0, alpha: 0.30)
-                .setFill()
-            iconRect.fill(using: .color)
-            return true
-        }
-        NSApp.applicationIconImage = icon
     }
 
     private func circularHueDistance(from start: CGFloat, to end: CGFloat) -> CGFloat {

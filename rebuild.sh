@@ -1,9 +1,9 @@
 #!/bin/zsh
 # Standard Jot build script.
-# Uses icon.png from project root, composites it over BG_COLOR, builds everything.
+# Uses the STATIC transparent icon.png from project root (no background composite) and
+# builds everything. (The old dynamic bg-tinting was removed with the reefAccent icon.)
 set -euo pipefail
 
-BG_COLOR="${1:-#000F18}"   # pass a hex like ./rebuild.sh "#1A1A2E" to override
 APP_PATH="Jot.app"
 BIN_PATH="$APP_PATH/Contents/MacOS/GlassPanel"
 RES_PATH="$APP_PATH/Contents/Resources"
@@ -13,24 +13,19 @@ if [[ ! -f "icon.png" ]]; then
   echo "icon.png not found in project root" >&2; exit 1
 fi
 
-echo "→ compositing icon.png with background $BG_COLOR"
-python3 - "$BG_COLOR" << 'PYEOF'
-import sys
+echo "→ generating icon sizes from icon.png (static, transparent)"
+python3 - << 'PYEOF'
 from PIL import Image
+import os
 
-hex_color = sys.argv[1].lstrip("#")
-r, g, b = int(hex_color[0:2],16), int(hex_color[2:4],16), int(hex_color[4:6],16)
+result = Image.open("icon.png").convert("RGBA")   # already a finished transparent icon
 
-src = Image.open("icon.png").convert("RGBA")
-bg  = Image.new("RGBA", src.size, (r, g, b, 255))
-result = Image.alpha_composite(bg, src)
-
-import os; os.makedirs("build_icon/AppIcon.iconset", exist_ok=True)
+os.makedirs("build_icon/AppIcon.iconset", exist_ok=True)
 for s in [16, 32, 128, 256, 512]:
     result.resize((s,    s   ), Image.LANCZOS).save(f"build_icon/AppIcon.iconset/icon_{s}x{s}.png")
     result.resize((s*2, s*2), Image.LANCZOS).save(f"build_icon/AppIcon.iconset/icon_{s}x{s}@2x.png")
 result.save("build_icon/icon_composited.png")
-print(f"   icon sizes generated, bg=#{hex_color.upper()}")
+print("   icon sizes generated (transparent, no bg composite)")
 PYEOF
 
 echo "→ creating AppIcon.icns"
@@ -53,4 +48,4 @@ xattr -rc "$APP_PATH"
 codesign --force --deep --sign - "$APP_PATH"
 touch "$APP_PATH"
 
-echo "✓ Done: $APP_PATH (bg=$BG_COLOR)"
+echo "✓ Done: $APP_PATH (static icon)"
