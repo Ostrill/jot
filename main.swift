@@ -64,6 +64,7 @@ struct PanelSettings {
     var menuSliderOffset: CGFloat = 25.0
     var wordWrap: Bool = true
     var showWrapGuides: Bool = true
+    var renderInlineFormulas: Bool = true   // render $$…$$ as images (off → plain source text)
     var wrapGuideXOffset: CGFloat = 0.0
     var wrapGuideThickness: CGFloat = 1.5
     var wrapGuideTopTrim: CGFloat = 1.0
@@ -204,6 +205,7 @@ struct PanelSettings {
         self.menuSliderOffset = CGFloat(dictionary["menuSliderOffset"] as? Double ?? 25.0)
         self.wordWrap = dictionary["wordWrap"] as? Bool ?? true
         self.showWrapGuides = dictionary["showWrapGuides"] as? Bool ?? true
+        self.renderInlineFormulas = dictionary["renderInlineFormulas"] as? Bool ?? true
         self.wrapGuideXOffset = CGFloat(dictionary["wrapGuideXOffset"] as? Double ?? 0.0)
         self.wrapGuideThickness = CGFloat(dictionary["wrapGuideThickness"] as? Double ?? 1.5)
         self.wrapGuideTopTrim = CGFloat(dictionary["wrapGuideTopTrim"] as? Double ?? 1.0)
@@ -236,6 +238,7 @@ struct PanelSettings {
             "menuSliderOffset": menuSliderOffset,
             "wordWrap": wordWrap,
             "showWrapGuides": showWrapGuides,
+            "renderInlineFormulas": renderInlineFormulas,
             "wrapGuideXOffset": wrapGuideXOffset,
             "wrapGuideThickness": wrapGuideThickness,
             "wrapGuideTopTrim": wrapGuideTopTrim,
@@ -343,7 +346,6 @@ final class HitTestShieldView: NSView {
 /// Implemented by GlassEditorView to drive inline LaTeX editing from key events.
 protocol MathEditingHost: AnyObject {
     var isEditingMath: Bool { get }
-    func mathReturnKey() -> Bool               // Return commits the active formula
     func mathExitRight() -> Bool               // →  at latex end steps out past the closing "$$"
     func mathExitLeft() -> Bool                // ←  at latex start steps out before the opening "$$"
     func mathEnterAttachment(fromLeft: Bool) -> Bool   // →/← into a rendered formula opens it
@@ -411,14 +413,10 @@ final class EditorTextView: NSTextView {
         return became
     }
 
-    // Enter / arrow / delete keys drive the formula edit lifecycle. Each just
-    // repositions the caret; reconcileMath() (on the resulting selection change)
-    // does the rendering. That keeps one code path instead of scattered commits.
-    override func insertNewline(_ sender: Any?) {
-        if let host = mathHost, host.mathReturnKey() { return }
-        super.insertNewline(sender)
-    }
-
+    // Arrow / delete keys drive the formula edit lifecycle. Each just repositions
+    // the caret; reconcileMath() (on the resulting selection change) does the
+    // rendering. Enter is deliberately NOT intercepted, so it inserts a newline
+    // inside the formula source — multi-line formulas (LaTeX "\\") are supported.
     override func moveRight(_ sender: Any?) {
         if let host = mathHost, host.mathExitRight() || host.mathEnterAttachment(fromLeft: true) { return }
         super.moveRight(sender)
@@ -1133,6 +1131,16 @@ final class GlassEditorView: NSView {
         syncEditorLayout()
     }
 
+    /// Re-runs the document through the parser under the current renderInlineFormulas
+    /// setting: turns rendered images back into `$$…$$` source (off) or renders the
+    /// source into images (on). Call after toggling the setting.
+    func reprocessFormulaRendering() {
+        let caret = editorTextView.selectedRange().location
+        setText(serializedText())
+        let len = (editorTextView.string as NSString).length
+        editorTextView.setSelectedRange(NSRange(location: min(caret, len), length: 0))
+    }
+
     /// Serializes the document, turning rendered formula attachments back into
     /// `$$latex$$` source so files round-trip and stay editable elsewhere.
     private func serializedText() -> String {
@@ -1156,6 +1164,9 @@ final class GlassEditorView: NSView {
             .font: editorFont,
             .foregroundColor: settings.editorTextColor
         ]
+        guard settings.renderInlineFormulas else {
+            return NSAttributedString(string: text, attributes: baseAttrs)   // rendering off → plain source
+        }
         let result = NSMutableAttributedString()
         let ns = text as NSString
         var cursor = 0
@@ -1163,10 +1174,10 @@ final class GlassEditorView: NSView {
             if span.location > cursor {
                 result.append(NSAttributedString(string: ns.substring(with: NSRange(location: cursor, length: span.location - cursor)), attributes: baseAttrs))
             }
-            let latex = MathSyntax.latex(of: span, in: ns).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !latex.isEmpty,
-               let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) {
-                result.append(NSAttributedString(attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint)))
+            let raw = MathSyntax.latex(of: span, in: ns)
+            if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let base = MathRenderer.renderInlineBase(latex: raw, fontSize: settings.editorFontSize) {
+                result.append(NSAttributedString(attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint)))
             } else {
                 result.append(NSAttributedString(string: ns.substring(with: span), attributes: baseAttrs))
             }
@@ -1426,7 +1437,7 @@ extension GlassEditorView: NSTextViewDelegate {
         // The ONLY automatic behaviour: typing the second "$" of an unescaped "$$"
         // *outside* a formula queues an auto-inserted closing "$$". Typing "$$"
         // *inside* a formula is left alone — the parser then closes it there.
-        if replacementString == "$", affectedCharRange.length == 0, mathEditRange == nil {
+        if replacementString == "$", affectedCharRange.length == 0, mathEditRange == nil, settings.renderInlineFormulas {
             let loc = affectedCharRange.location
             let ns = textView.string as NSString
             if loc >= 1, ns.substring(with: NSRange(location: loc - 1, length: 1)) == "$",
@@ -1449,13 +1460,6 @@ extension GlassEditorView: MathEditingHost {
     var isEditingMath: Bool { mathEditRange != nil }
 
     // MARK: Key handling — each just moves the caret; reconcileMath() renders.
-
-    /// Return commits the active formula: park the caret past the closing "$$".
-    func mathReturnKey() -> Bool {
-        guard let r = mathEditRange else { return false }
-        editorTextView.setSelectedRange(NSRange(location: r.location + r.length, length: 0))
-        return true
-    }
 
     /// → at the latex end steps out past the closing "$$" (commits the formula).
     func mathExitRight() -> Bool {
@@ -1552,6 +1556,10 @@ extension GlassEditorView: MathEditingHost {
     /// caret is remapped across each replacement. Idempotent and re-entrancy-safe.
     private func reconcileMath() {
         guard !isReconciling, !isProcessingMath, let storage = editorTextView.textStorage else { return }
+        guard settings.renderInlineFormulas else {
+            if mathEditRange != nil { mathEditRange = nil; hideMathPreview(); clearMathHighlight() }
+            return
+        }
         isReconciling = true
         isProcessingMath = true
         defer { isProcessingMath = false; isReconciling = false }
@@ -1609,14 +1617,16 @@ extension GlassEditorView: MathEditingHost {
     private func renderSpan(_ span: NSRange, caret: Int) -> Int {
         guard let storage = editorTextView.textStorage,
               span.location + span.length <= storage.length else { return caret }
-        let latex = MathSyntax.latex(of: span, in: storage.string as NSString).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Store the EXACT content between the delimiters (no trimming) so the source
+        // round-trips byte-for-byte — the app must never silently edit the text.
+        let raw = MathSyntax.latex(of: span, in: storage.string as NSString)
         let newLength: Int
-        if latex.isEmpty {
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             storage.replaceCharacters(in: span, with: "")
             newLength = 0
-        } else if let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) {
+        } else if let base = MathRenderer.renderInlineBase(latex: raw, fontSize: settings.editorFontSize) {
             storage.replaceCharacters(in: span, with: NSAttributedString(
-                attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint)))
+                attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint)))
             newLength = 1
         } else {
             return caret   // invalid LaTeX → leave the raw source in place
@@ -1777,6 +1787,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var rainbowItem: NSMenuItem!
     private var wordWrapItem: NSMenuItem!
     private var wrapGuidesItem: NSMenuItem!
+    private var renderFormulasItem: NSMenuItem!
 
     private var sliderViews: [String: SliderMenuItemView] = [:]
     private var pendingFocusRestore = false
@@ -1972,6 +1983,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         wrapGuidesItem = NSMenuItem(title: "Wrapped Line Guides", action: #selector(toggleWrapGuides(_:)), keyEquivalent: "")
         wrapGuidesItem.target = self
         formatMenu.addItem(wrapGuidesItem)
+
+        formatMenu.addItem(.separator())
+        renderFormulasItem = NSMenuItem(title: "Render LaTeX Formulas", action: #selector(toggleRenderFormulas(_:)), keyEquivalent: "")
+        renderFormulasItem.target = self
+        formatMenu.addItem(renderFormulasItem)
     }
 
     private func setupAppearanceMenu() {
@@ -2201,6 +2217,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         applySettings()
     }
 
+    @objc private func toggleRenderFormulas(_ sender: Any?) {
+        settings.renderInlineFormulas.toggle()
+        applySettings()                         // pushes the setting into editorView
+        editorView.reprocessFormulaRendering()  // re-render or un-render the current document
+    }
+
     @objc private func toggleWrapGuides(_ sender: Any?) {
         settings.showWrapGuides.toggle()
         applySettings()
@@ -2250,6 +2272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         wordWrapItem.state = settings.wordWrap ? .on : .off
         wrapGuidesItem.state = settings.showWrapGuides ? .on : .off
         wrapGuidesItem.isEnabled = settings.wordWrap
+        renderFormulasItem.state = settings.renderInlineFormulas ? .on : .off
 
         for view in sliderViews.values {
             view.horizontalOffset = settings.menuSliderOffset
