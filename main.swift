@@ -343,10 +343,12 @@ final class HitTestShieldView: NSView {
 /// Implemented by GlassEditorView to drive inline LaTeX editing from key events.
 protocol MathEditingHost: AnyObject {
     var isEditingMath: Bool { get }
-    func mathCaretAtFormulaEnd() -> Bool
-    func mathCaretAtFormulaStart() -> Bool
-    func mathCommit()
-    func mathDeleteBackwardAtStart() -> Bool
+    func mathReturnKey() -> Bool               // Return commits the active formula
+    func mathExitRight() -> Bool               // →  at latex end steps out past the closing "$$"
+    func mathExitLeft() -> Bool                // ←  at latex start steps out before the opening "$$"
+    func mathEnterAttachment(fromLeft: Bool) -> Bool   // →/← into a rendered formula opens it
+    func mathClick(at point: NSPoint) -> Bool          // click a rendered formula → open at the click
+    func mathDeleteBackwardAtStart() -> Bool   // ⌫ at the opening "$$" unwraps the formula
 }
 
 final class EditorTextView: NSTextView {
@@ -409,40 +411,93 @@ final class EditorTextView: NSTextView {
         return became
     }
 
-    // Enter / arrow / delete keys drive the formula edit lifecycle.
+    // Enter / arrow / delete keys drive the formula edit lifecycle. Each just
+    // repositions the caret; reconcileMath() (on the resulting selection change)
+    // does the rendering. That keeps one code path instead of scattered commits.
     override func insertNewline(_ sender: Any?) {
-        if let host = mathHost, host.isEditingMath {
-            host.mathCommit()
-            return
-        }
+        if let host = mathHost, host.mathReturnKey() { return }
         super.insertNewline(sender)
     }
 
     override func moveRight(_ sender: Any?) {
-        if let host = mathHost, host.isEditingMath, host.mathCaretAtFormulaEnd() {
-            host.mathCommit()
-            return
-        }
+        if let host = mathHost, host.mathExitRight() || host.mathEnterAttachment(fromLeft: true) { return }
         super.moveRight(sender)
     }
 
     override func moveLeft(_ sender: Any?) {
-        if let host = mathHost, host.isEditingMath, host.mathCaretAtFormulaStart() {
-            host.mathCommit()
-            return
-        }
+        if let host = mathHost, host.mathExitLeft() || host.mathEnterAttachment(fromLeft: false) { return }
         super.moveLeft(sender)
     }
 
     override func deleteBackward(_ sender: Any?) {
-        if let host = mathHost, host.isEditingMath, host.mathDeleteBackwardAtStart() {
-            return
-        }
+        if let host = mathHost, host.mathDeleteBackwardAtStart() { return }
         super.deleteBackward(sender)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let host = mathHost, host.mathClick(at: point) { return }
+        super.mouseDown(with: event)
     }
 }
 
 // MARK: - Inline LaTeX math rendering
+
+/// The single parser for `$$…$$` formula syntax, used everywhere (file load,
+/// serialization, and live editing) so behaviour is identical. A formula is any
+/// text between an unescaped `$$` pair; `\$` is a literal dollar (also valid
+/// LaTeX). Pairing is greedy, left→right, non-overlapping.
+enum MathSyntax {
+    private static let dollar: unichar = 0x24
+    private static let backslash: unichar = 0x5C
+
+    /// A `$` at `idx` is escaped iff preceded by an odd run of backslashes.
+    static func isEscaped(_ ns: NSString, _ idx: Int) -> Bool {
+        var count = 0
+        var j = idx - 1
+        while j >= 0, ns.character(at: j) == backslash { count += 1; j -= 1 }
+        return count % 2 == 1
+    }
+
+    /// Start indices of every unescaped `$$` delimiter, left→right.
+    static func delimiters(in ns: NSString) -> [Int] {
+        var result: [Int] = []
+        var i = 0
+        while i + 1 < ns.length {
+            if ns.character(at: i) == dollar, ns.character(at: i + 1) == dollar, !isEscaped(ns, i) {
+                result.append(i)
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+        return result
+    }
+
+    /// Ranges of complete `$$…$$` spans (delimiters included). A trailing
+    /// unmatched `$$` yields no span.
+    static func completeSpans(in ns: NSString) -> [NSRange] {
+        let d = delimiters(in: ns)
+        var spans: [NSRange] = []
+        var i = 0
+        while i + 1 < d.count {
+            spans.append(NSRange(location: d[i], length: d[i + 1] + 2 - d[i]))
+            i += 2
+        }
+        return spans
+    }
+
+    /// The latex content between a span's `$$…$$` delimiters.
+    static func latex(of span: NSRange, in ns: NSString) -> String {
+        ns.substring(with: NSRange(location: span.location + 2, length: span.length - 4))
+    }
+
+    /// The complete span whose interior contains `caret` (strictly between the
+    /// delimiters), i.e. the formula currently being edited — if any.
+    static func activeSpan(in ns: NSString, caret: Int) -> NSRange? {
+        completeSpans(in: ns).first { caret > $0.location && caret < $0.location + $0.length }
+    }
+}
 
 enum MathRenderer {
     /// Transparent margin baked around inline formula images (x = horizontal,
@@ -540,6 +595,7 @@ final class MathPreviewView: NSView {
     private let contentContainer = NSView(frame: .zero)
     private let imageView = NSImageView(frame: .zero)
     private let padding: CGFloat = 22.0
+    private var baseImage: NSImage?           // white render, kept so the tint can follow Rainbow
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -568,8 +624,17 @@ final class MathPreviewView: NSView {
         imageView.frame = bounds.insetBy(dx: padding, dy: padding)
     }
 
-    func setImage(_ image: NSImage?) {
-        imageView.image = image
+    /// Stores the white base render and shows it tinted. Keeping the base lets the
+    /// tint be refreshed as Rainbow animates (see applyTint), so the preview never
+    /// drifts out of sync with the window colour.
+    func setImage(_ base: NSImage?, tint: NSColor) {
+        baseImage = base
+        imageView.image = base?.recolored(to: tint)
+    }
+
+    /// Re-tints the current preview image to `color` (cheap; no re-render).
+    func applyTint(_ color: NSColor) {
+        imageView.image = baseImage?.recolored(to: color)
     }
 
     func contentSize(for image: NSImage?) -> NSSize {
@@ -741,8 +806,10 @@ final class GlassEditorView: NSView {
 
     // Inline LaTeX editing state.
     private let mathPreview = MathPreviewView(frame: .zero)
-    private var mathEditRange: NSRange?        // full "$$…$$" span being edited
+    private var mathEditRange: NSRange?        // the raw "$$…$$" span the caret is inside (recomputed, not grown)
     private var isProcessingMath = false       // re-entrancy guard for programmatic edits
+    private var isReconciling = false          // re-entrancy guard around reconcileMath()
+    private var reconcilePending = false       // a reconcile is queued for the next runloop tick
     private var pendingAutoCloseAt: Int?       // caret pos where "$$" should auto-close
 
     private var editorFont: NSFont {
@@ -1023,7 +1090,10 @@ final class GlassEditorView: NSView {
         // the glyph text — retint them (throttled via refreshEditorTint) so they
         // cycle hue with Rainbow too. Cheap: cached-image recolor, no re-render.
         currentFormulaTint = updatedSettings.editorCompositeTextColor
-        if refreshEditorTint { recolorFormulas(to: currentFormulaTint) }
+        if refreshEditorTint {
+            recolorFormulas(to: currentFormulaTint)
+            if !mathPreview.isHidden { mathPreview.applyTint(currentFormulaTint) }
+        }
         wrapGuideView.guideColor = updatedSettings.editorCompositeTextColor.withAlphaComponent(
             max(0.0, min(1.0, updatedSettings.wrapGuideOpacity))
         )
@@ -1079,7 +1149,8 @@ final class GlassEditorView: NSView {
         return result as String
     }
 
-    /// Parses `$$…$$` spans in plain text into rendered formula attachments.
+    /// Parses `$$…$$` spans (via the shared MathSyntax parser) into rendered
+    /// formula attachments; empty/invalid spans stay as raw source text.
     private func attributedStringRenderingFormulas(from text: String) -> NSAttributedString {
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: editorFont,
@@ -1087,31 +1158,22 @@ final class GlassEditorView: NSView {
         ]
         let result = NSMutableAttributedString()
         let ns = text as NSString
-        var i = 0
-        while i < ns.length {
-            let open = ns.range(of: "$$", range: NSRange(location: i, length: ns.length - i))
-            if open.location == NSNotFound {
-                result.append(NSAttributedString(string: ns.substring(from: i), attributes: baseAttrs))
-                break
+        var cursor = 0
+        for span in MathSyntax.completeSpans(in: ns) {
+            if span.location > cursor {
+                result.append(NSAttributedString(string: ns.substring(with: NSRange(location: cursor, length: span.location - cursor)), attributes: baseAttrs))
             }
-            if open.location > i {
-                result.append(NSAttributedString(string: ns.substring(with: NSRange(location: i, length: open.location - i)), attributes: baseAttrs))
-            }
-            let afterOpen = open.location + 2
-            let close = ns.range(of: "$$", range: NSRange(location: afterOpen, length: ns.length - afterOpen))
-            if close.location == NSNotFound {
-                result.append(NSAttributedString(string: ns.substring(from: open.location), attributes: baseAttrs))
-                break
-            }
-            let latex = ns.substring(with: NSRange(location: afterOpen, length: close.location - afterOpen))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let latex = MathSyntax.latex(of: span, in: ns).trimmingCharacters(in: .whitespacesAndNewlines)
             if !latex.isEmpty,
                let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) {
                 result.append(NSAttributedString(attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint)))
             } else {
-                result.append(NSAttributedString(string: ns.substring(with: NSRange(location: open.location, length: close.location + 2 - open.location)), attributes: baseAttrs))
+                result.append(NSAttributedString(string: ns.substring(with: span), attributes: baseAttrs))
             }
-            i = close.location + 2
+            cursor = span.location + span.length
+        }
+        if cursor < ns.length {
+            result.append(NSAttributedString(string: ns.substring(from: cursor), attributes: baseAttrs))
         }
         return result
     }
@@ -1337,58 +1399,38 @@ extension GlassEditorView: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         syncBackdrop()
         syncEditorLayout()
-        handleMathAfterTextChange()
+        scheduleReconcile()
         onTextDidChange?()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
-        guard !isProcessingMath else { return }
-        let sel = editorTextView.selectedRange()
+        scheduleReconcile()
+    }
 
-        if mathEditRange == nil {
-            // Caret on a rendered formula → expand it back to editable source.
-            if let attRange = mathAttachmentRange(near: sel) {
-                expandMathAttachment(at: attRange)
-            // Caret inside a raw "$$…$$" span (e.g. after an invalid commit) → edit it.
-            } else if sel.length == 0, let span = mathSourceSpanContaining(sel.location) {
-                enterMathEditing(range: span)
-            }
-            return
-        }
-
-        // While editing: keep preview positioned, or commit when the caret leaves.
-        // On commit, hand the new caret spot (e.g. where the user clicked) to
-        // commitMath so it lands there instead of snapping to the formula end.
-        let r = mathEditRange!
-        let caret = sel.location
-        if sel.length == 0 && caret >= r.location && caret <= r.location + r.length {
-            updateMathPreview()
-        } else {
-            commitMath(preferredCaret: sel.length == 0 ? sel.location : nil)
+    /// Queues reconcileMath() for the next runloop tick. Mutating the text storage
+    /// and forcing layout *inside* the change/selection notifications corrupts the
+    /// layout manager (crash in _fillLayoutHoleForCharacterRange), so the actual
+    /// work is always done just after the notification returns. Coalesced.
+    private func scheduleReconcile() {
+        guard !reconcilePending, !isReconciling, !isProcessingMath else { return }
+        reconcilePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.reconcilePending = false
+            self.reconcileMath()
         }
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         guard !isProcessingMath else { return true }
-
-        if let r = mathEditRange {
-            // Grow/shrink the tracked span for edits inside it; stop if outside.
-            let replLen = (replacementString as NSString?)?.length ?? 0
-            let delta = replLen - affectedCharRange.length
-            let end = r.location + r.length
-            if affectedCharRange.location >= r.location && affectedCharRange.location + affectedCharRange.length <= end {
-                mathEditRange = NSRange(location: r.location, length: max(0, r.length + delta))
-            } else {
-                stopMathEditing()
-            }
-            return true
-        }
-
-        // Detect a freshly-typed "$$" so it can auto-close on the next runloop.
-        if replacementString == "$", affectedCharRange.length == 0 {
+        // The ONLY automatic behaviour: typing the second "$" of an unescaped "$$"
+        // *outside* a formula queues an auto-inserted closing "$$". Typing "$$"
+        // *inside* a formula is left alone — the parser then closes it there.
+        if replacementString == "$", affectedCharRange.length == 0, mathEditRange == nil {
             let loc = affectedCharRange.location
             let ns = textView.string as NSString
-            if loc >= 1, ns.substring(with: NSRange(location: loc - 1, length: 1)) == "$" {
+            if loc >= 1, ns.substring(with: NSRange(location: loc - 1, length: 1)) == "$",
+               !MathSyntax.isEscaped(ns, loc - 1) {
                 pendingAutoCloseAt = loc + 1
             }
         }
@@ -1406,144 +1448,195 @@ extension GlassEditorView: NSTextViewDelegate {
 extension GlassEditorView: MathEditingHost {
     var isEditingMath: Bool { mathEditRange != nil }
 
-    func mathCaretAtFormulaEnd() -> Bool {
+    // MARK: Key handling — each just moves the caret; reconcileMath() renders.
+
+    /// Return commits the active formula: park the caret past the closing "$$".
+    func mathReturnKey() -> Bool {
         guard let r = mathEditRange else { return false }
-        return editorTextView.selectedRange().location >= r.location + r.length - 2
+        editorTextView.setSelectedRange(NSRange(location: r.location + r.length, length: 0))
+        return true
     }
 
-    func mathCaretAtFormulaStart() -> Bool {
-        guard let r = mathEditRange else { return false }
-        return editorTextView.selectedRange().location <= r.location + 2
+    /// → at the latex end steps out past the closing "$$" (commits the formula).
+    func mathExitRight() -> Bool {
+        guard let r = mathEditRange,
+              editorTextView.selectedRange().location >= r.location + r.length - 2 else { return false }
+        editorTextView.setSelectedRange(NSRange(location: r.location + r.length, length: 0))
+        return true
     }
 
-    func mathCommit() {
-        commitMath(preferredCaret: nil)
+    /// ← at the latex start steps out before the opening "$$" (commits the formula).
+    func mathExitLeft() -> Bool {
+        guard let r = mathEditRange,
+              editorTextView.selectedRange().location <= r.location + 2 else { return false }
+        editorTextView.setSelectedRange(NSRange(location: r.location, length: 0))
+        return true
     }
 
-    /// Commits the formula being edited into a rendered attachment (or removes an
-    /// empty one). `preferredCaret` is where the caret should end up (e.g. the
-    /// spot the user just clicked); it's remapped across the source→attachment
-    /// length change so navigation lands where intended. nil → just after the
-    /// formula (Enter / arrow-out).
-    private func commitMath(preferredCaret: Int?) {
-        guard let r = mathEditRange, let storage = editorTextView.textStorage,
-              r.location + r.length <= storage.length else { stopMathEditing(); return }
-        let latex = currentMathLatex().trimmingCharacters(in: .whitespacesAndNewlines)
-        mathEditRange = nil
-        hideMathPreview()
-        clearMathHighlight()
-
-        if latex.isEmpty {
-            // Nothing typed → remove the empty "$$$$".
-            isProcessingMath = true
-            storage.replaceCharacters(in: r, with: "")
-            editorTextView.setSelectedRange(NSRange(location: caretAfterCommit(preferredCaret, range: r, newLength: 0), length: 0))
-            isProcessingMath = false
-            syncTextLayersAndLayout()
-            return
-        }
-        guard let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) else {
-            return  // invalid LaTeX → leave the raw "$$…$$" (re-enterable via click)
-        }
+    /// Arrowing into a rendered formula opens it for editing, caret at the latex
+    /// start when arriving from the left (→) or the end when arriving from the
+    /// right (←). A direct mutation (safe here — this is a key command, not a
+    /// notification callback).
+    func mathEnterAttachment(fromLeft: Bool) -> Bool {
+        guard mathEditRange == nil, let storage = editorTextView.textStorage else { return false }
+        let caret = editorTextView.selectedRange().location
+        let idx = fromLeft ? caret : caret - 1
+        guard idx >= 0, idx < storage.length,
+              storage.attribute(.attachment, at: idx, effectiveRange: nil) is MathAttachment else { return false }
         isProcessingMath = true
-        let attStr = NSAttributedString(attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint))
-        storage.replaceCharacters(in: r, with: attStr)
-        editorTextView.setSelectedRange(NSRange(location: caretAfterCommit(preferredCaret, range: r, newLength: 1), length: 0))
+        expandMathAttachment(at: NSRange(location: idx, length: 1), caretAtStart: fromLeft)
         isProcessingMath = false
+        mathEditRange = MathSyntax.activeSpan(in: storage.string as NSString, caret: editorTextView.selectedRange().location)
+        applyMathHighlight()
+        updateMathPreview()
         syncTextLayersAndLayout()
+        return true
     }
 
-    /// Maps a desired caret across the source(len r.length)→attachment(newLength)
-    /// replacement at `r`. nil → just after the committed formula.
-    private func caretAfterCommit(_ preferredCaret: Int?, range r: NSRange, newLength: Int) -> Int {
-        guard let p = preferredCaret else { return r.location + newLength }
-        if p <= r.location { return p }                                       // target before the formula
-        if p >= r.location + r.length { return p + (newLength - r.length) }    // target after → shift by length delta
-        return r.location + newLength                                          // target was inside → land just after
+    /// A click on a rendered formula opens it and drops the caret at the latex
+    /// character nearest the click. SwiftMath doesn't map glyphs back to source, so
+    /// this is a proportional estimate (fraction of the image width → fraction of
+    /// the latex string) — approximate, but it tracks where you clicked.
+    func mathClick(at point: NSPoint) -> Bool {
+        guard mathEditRange == nil,
+              let storage = editorTextView.textStorage,
+              let lm = editorTextView.layoutManager,
+              let tc = editorTextView.textContainer else { return false }
+        let origin = editorTextView.textContainerOrigin
+        let p = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        var frac: CGFloat = 0
+        let glyph = lm.glyphIndex(for: p, in: tc, fractionOfDistanceThroughGlyph: &frac)
+        let charIdx = lm.characterIndexForGlyph(at: glyph)
+        guard charIdx >= 0, charIdx < storage.length,
+              let att = storage.attribute(.attachment, at: charIdx, effectiveRange: nil) as? MathAttachment else { return false }
+        if editorTextView.window?.firstResponder !== editorTextView {
+            editorTextView.window?.makeFirstResponder(editorTextView)
+        }
+        let latexCount = (att.latex as NSString).length
+        let offset = min(latexCount, max(0, Int((CGFloat(latexCount) * frac).rounded())))
+        isProcessingMath = true
+        expandMathAttachment(at: NSRange(location: charIdx, length: 1), caretAtStart: true)
+        editorTextView.setSelectedRange(NSRange(location: charIdx + 2 + offset, length: 0))
+        isProcessingMath = false
+        mathEditRange = MathSyntax.activeSpan(in: storage.string as NSString, caret: editorTextView.selectedRange().location)
+        applyMathHighlight()
+        updateMathPreview()
+        syncTextLayersAndLayout()
+        return true
     }
 
+    /// ⌫ right after the opening "$$" unwraps the formula: both delimiters go and
+    /// the content stays as plain text (so an empty formula simply disappears).
     func mathDeleteBackwardAtStart() -> Bool {
         guard let r = mathEditRange, let storage = editorTextView.textStorage,
-              r.location + r.length <= storage.length else { return false }
-        let caret = editorTextView.selectedRange().location
-        guard caret <= r.location + 2, currentMathLatex().isEmpty else { return false }
-        // Backspacing an empty formula removes the whole "$$$$".
+              r.location + r.length <= storage.length,
+              editorTextView.selectedRange().location == r.location + 2 else { return false }
+        let content = MathSyntax.latex(of: r, in: storage.string as NSString)
         isProcessingMath = true
-        clearMathHighlight()
-        storage.replaceCharacters(in: r, with: "")
+        storage.replaceCharacters(in: r, with: NSAttributedString(
+            string: content, attributes: [.font: editorFont, .foregroundColor: settings.editorTextColor]))
         mathEditRange = nil
         hideMathPreview()
+        clearMathHighlight()
         editorTextView.setSelectedRange(NSRange(location: r.location, length: 0))
         isProcessingMath = false
         syncTextLayersAndLayout()
         return true
     }
 
-    // MARK: Internal helpers
+    // MARK: Reconciliation — the single source of truth.
 
-    private func stopMathEditing() {
-        mathEditRange = nil
-        hideMathPreview()
-        clearMathHighlight()
-    }
-
-    private func handleMathAfterTextChange() {
-        guard !isProcessingMath else { return }
-
-        // 1. Auto-close a freshly-typed "$$".
-        if let pos = pendingAutoCloseAt {
-            pendingAutoCloseAt = nil
-            let caret = editorTextView.selectedRange().location
-            let ns = editorTextView.string as NSString
-            if mathEditRange == nil, caret == pos, caret >= 2,
-               ns.substring(with: NSRange(location: caret - 2, length: 2)) == "$$" {
-                beginAutoClosedFormula(openStart: caret - 2, caret: caret)
-                return
-            }
-        }
-
-        // 2. Validate / refresh an in-progress formula.
-        guard let r = mathEditRange else { return }
-        let ns = editorTextView.string as NSString
-        if r.length < 4 || r.location + r.length > ns.length ||
-            ns.substring(with: NSRange(location: r.location, length: 2)) != "$$" ||
-            ns.substring(with: NSRange(location: r.location + r.length - 2, length: 2)) != "$$" {
-            stopMathEditing()
-            return
-        }
-        updateMathPreview()
-    }
-
-    private func beginAutoClosedFormula(openStart: Int, caret: Int) {
-        guard let storage = editorTextView.textStorage else { return }
+    /// Makes the storage match the parse after any text/selection change: the one
+    /// complete span the caret is inside stays raw (editable); every other complete
+    /// span becomes a rendered image (empty → removed, invalid → left as raw). The
+    /// caret is remapped across each replacement. Idempotent and re-entrancy-safe.
+    private func reconcileMath() {
+        guard !isReconciling, !isProcessingMath, let storage = editorTextView.textStorage else { return }
+        isReconciling = true
         isProcessingMath = true
+        defer { isProcessingMath = false; isReconciling = false }
+
+        applyPendingAutoClose()
+
+        // Caret on a rendered formula → expand it to raw source for editing. If the
+        // caret is at/left of the image the caret goes to the latex start, otherwise
+        // to the latex end (so it lands near where the click/caret was).
+        let sel = editorTextView.selectedRange()
+        if sel.length <= 1, let attRange = mathAttachmentRange(near: sel) {
+            expandMathAttachment(at: attRange, caretAtStart: sel.location <= attRange.location)
+        }
+
+        // Render every complete span the caret is NOT inside (right→left keeps the
+        // earlier spans' indices valid; the caret is remapped across each render).
+        var caret = editorTextView.selectedRange().location
+        let spans = MathSyntax.completeSpans(in: storage.string as NSString)
+        let active = MathSyntax.activeSpan(in: storage.string as NSString, caret: caret)
+        for span in spans.reversed() where !(active.map { NSEqualRanges($0, span) } ?? false) {
+            caret = renderSpan(span, caret: caret)
+        }
+        editorTextView.setSelectedRange(NSRange(location: max(0, min(caret, storage.length)), length: 0))
+
+        // Refresh the editing state/preview for wherever the caret ended up.
+        mathEditRange = MathSyntax.activeSpan(in: storage.string as NSString, caret: editorTextView.selectedRange().location)
+        if mathEditRange != nil {
+            applyMathHighlight()
+            updateMathPreview()
+        } else {
+            hideMathPreview()
+            clearMathHighlight()
+        }
+        syncTextLayersAndLayout()
+    }
+
+    /// The only automatic edit: after a just-typed opening "$$", insert the closing
+    /// "$$" and leave the caret between them.
+    private func applyPendingAutoClose() {
+        guard let pos = pendingAutoCloseAt else { return }
+        pendingAutoCloseAt = nil
+        guard let storage = editorTextView.textStorage else { return }
+        let caret = editorTextView.selectedRange().location
+        let ns = storage.string as NSString
+        guard caret == pos, caret >= 2, caret <= ns.length,
+              ns.substring(with: NSRange(location: caret - 2, length: 2)) == "$$",
+              !MathSyntax.isEscaped(ns, caret - 2) else { return }
         storage.replaceCharacters(in: NSRange(location: caret, length: 0), with: NSAttributedString(
             string: "$$", attributes: [.font: editorFont, .foregroundColor: settings.editorTextColor]))
-        mathEditRange = NSRange(location: openStart, length: 4)
-        editorTextView.setSelectedRange(NSRange(location: caret, length: 0))   // caret stays between $$|$$
-        isProcessingMath = false
-        syncTextLayersAndLayout()
-        updateMathPreview()
+        editorTextView.setSelectedRange(NSRange(location: caret, length: 0))   // between $$|$$
     }
 
-    private func enterMathEditing(range: NSRange) {
-        mathEditRange = range
-        updateMathPreview()
+    /// Replaces one complete raw span with its rendered image (empty → removed,
+    /// invalid → left untouched). Returns the caret remapped across the change.
+    private func renderSpan(_ span: NSRange, caret: Int) -> Int {
+        guard let storage = editorTextView.textStorage,
+              span.location + span.length <= storage.length else { return caret }
+        let latex = MathSyntax.latex(of: span, in: storage.string as NSString).trimmingCharacters(in: .whitespacesAndNewlines)
+        let newLength: Int
+        if latex.isEmpty {
+            storage.replaceCharacters(in: span, with: "")
+            newLength = 0
+        } else if let base = MathRenderer.renderInlineBase(latex: latex, fontSize: settings.editorFontSize) {
+            storage.replaceCharacters(in: span, with: NSAttributedString(
+                attachment: MathAttachment(latex: latex, baseImage: base, font: editorFont, tint: currentFormulaTint)))
+            newLength = 1
+        } else {
+            return caret   // invalid LaTeX → leave the raw source in place
+        }
+        return remapCaret(caret, across: span, newLength: newLength)
     }
 
-    private func currentMathLatex() -> String {
-        guard let r = mathEditRange else { return "" }
-        let ns = editorTextView.string as NSString
-        guard r.length >= 4, r.location + r.length <= ns.length else { return "" }
-        return ns.substring(with: NSRange(location: r.location + 2, length: r.length - 4))
+    /// Maps a caret across replacing `r` (length r.length) with `newLength` chars.
+    private func remapCaret(_ caret: Int, across r: NSRange, newLength: Int) -> Int {
+        if caret <= r.location { return caret }
+        if caret >= r.location + r.length { return caret + (newLength - r.length) }
+        return r.location + newLength
     }
 
+    /// A math attachment touching the caret — the char at the caret (to its right)
+    /// or the char just before it (to its left), so a click/caret anywhere on a
+    /// rendered formula finds it, not only at its left edge.
     private func mathAttachmentRange(near sel: NSRange) -> NSRange? {
         guard let storage = editorTextView.textStorage else { return nil }
-        var indices: [Int] = []
-        if sel.length == 1 { indices.append(sel.location) }
-        if sel.length == 0 { indices.append(sel.location) }   // char to the right of caret
-        for idx in indices where idx >= 0 && idx < storage.length {
+        for idx in [sel.location, sel.location - 1] where idx >= 0 && idx < storage.length {
             if storage.attribute(.attachment, at: idx, effectiveRange: nil) is MathAttachment {
                 return NSRange(location: idx, length: 1)
             }
@@ -1551,62 +1644,36 @@ extension GlassEditorView: MathEditingHost {
         return nil
     }
 
-    /// Finds a raw "$$…$$" source span containing the caret (pairs delimiters).
-    private func mathSourceSpanContaining(_ caret: Int) -> NSRange? {
-        let ns = editorTextView.string as NSString
-        var positions: [Int] = []
-        var search = 0
-        while search < ns.length {
-            let found = ns.range(of: "$$", range: NSRange(location: search, length: ns.length - search))
-            if found.location == NSNotFound { break }
-            positions.append(found.location)
-            search = found.location + 2
-        }
-        var i = 0
-        while i + 1 < positions.count {
-            let open = positions[i]
-            let close = positions[i + 1]
-            if caret >= open && caret <= close + 2 {
-                return NSRange(location: open, length: close + 2 - open)
-            }
-            i += 2
-        }
-        return nil
-    }
-
-    private func expandMathAttachment(at range: NSRange) {
+    /// Replaces a rendered attachment with its raw "$$latex$$" source and drops the
+    /// caret at the latex start or end. A plain mutation — reconcileMath() (or the
+    /// arrow handler) wraps it in the guards and does the follow-up layout/preview.
+    private func expandMathAttachment(at range: NSRange, caretAtStart: Bool) {
         guard let storage = editorTextView.textStorage,
               let att = storage.attribute(.attachment, at: range.location, effectiveRange: nil) as? MathAttachment else { return }
-        isProcessingMath = true
         let source = "$$\(att.latex)$$"
         storage.replaceCharacters(in: range, with: NSAttributedString(string: source, attributes: [
             .font: editorFont,
             .foregroundColor: settings.editorTextColor
         ]))
-        let newRange = NSRange(location: range.location, length: (source as NSString).length)
-        mathEditRange = newRange
-        // Caret just before the closing "$$" (at the end of the latex).
-        editorTextView.setSelectedRange(NSRange(location: newRange.location + newRange.length - 2, length: 0))
-        isProcessingMath = false
-        syncTextLayersAndLayout()
-        updateMathPreview()
+        let caret = caretAtStart ? range.location + 2 : range.location + (source as NSString).length - 2
+        editorTextView.setSelectedRange(NSRange(location: caret, length: 0))
     }
 
     private func updateMathPreview() {
-        guard mathEditRange != nil else { hideMathPreview(); return }
+        guard let r = mathEditRange else { hideMathPreview(); return }
         applyMathHighlight()
-        let latex = currentMathLatex().trimmingCharacters(in: .whitespacesAndNewlines)
-        let image = latex.isEmpty ? nil
-            : MathRenderer.renderImage(latex: latex, fontSize: max(settings.editorFontSize + 6.0, 22.0), color: currentFormulaTint)
-        mathPreview.setImage(image)
-        let size = mathPreview.contentSize(for: image)
+        let latex = MathSyntax.latex(of: r, in: editorTextView.string as NSString).trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = latex.isEmpty ? nil
+            : MathRenderer.renderImage(latex: latex, fontSize: max(settings.editorFontSize + 6.0, 22.0), color: .white)
+        mathPreview.setImage(base, tint: currentFormulaTint)
+        let size = mathPreview.contentSize(for: base)
         positionMathPreview(belowFormulaRange: mathEditRange!, size: size)
         mathPreview.isHidden = false
     }
 
     private func hideMathPreview() {
         mathPreview.isHidden = true
-        mathPreview.setImage(nil)
+        mathPreview.setImage(nil, tint: .white)
     }
 
     /// Greys the editable "$$…$$" source so it stands out from the surrounding
