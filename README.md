@@ -46,14 +46,13 @@ whole app is one `main.swift` plus a vendored copy of
 
 ## Screenshots
 
-> _Add your own captures to the `assets/` folder (`⌘⇧4` on macOS) — the paths below
-> will start rendering automatically._
-
 <p align="center">
-  <img src="assets/screenshot-editor.png" width="70%" alt="Jot editor window">
+  <img src="assets/screenshot-editor.png" width="80%" alt="Jot's frosted-glass editor floating over another app">
+  <br><em>The frosted-glass editor floats over whatever is behind it.</em>
 </p>
 <p align="center">
-  <img src="assets/screenshot-formula.png" width="70%" alt="Inline LaTeX formula rendered in Jot">
+  <img src="assets/screenshot-formula.png" width="80%" alt="Inline LaTeX formula rendered live in Jot">
+  <br><em>Type <code>$$…$$</code> and the formula renders live, right where you're editing.</em>
 </p>
 
 ## Inline LaTeX — how it works
@@ -154,7 +153,7 @@ jot/
 ├── SwiftMath/                 ← vendored LaTeX renderer (MIT) + math font
 ├── build.sh                   ← build: compile + icon + bundle fonts + sign (no external deps)
 ├── make-dmg.sh                ← package Jot.app into a DMG
-├── assets/icon.png            ← app icon (1024², rendered from code)
+├── assets/                    ← app icon + README screenshots
 ├── AGENTS.md                  ← architecture notes for contributors / AI agents
 └── Jot.app/Contents/Info.plist
 ```

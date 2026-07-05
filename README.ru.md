@@ -49,14 +49,13 @@
 
 ## Скриншоты
 
-> _Добавь свои скриншоты в папку `assets/` (`⌘⇧4` на macOS) — пути ниже начнут
-> отображаться автоматически._
-
 <p align="center">
-  <img src="assets/screenshot-editor.png" width="70%" alt="Окно редактора Jot">
+  <img src="assets/screenshot-editor.png" width="80%" alt="Стеклянный редактор Jot поверх другого приложения">
+  <br><em>Матовое стекло редактора «висит» над тем, что за ним.</em>
 </p>
 <p align="center">
-  <img src="assets/screenshot-formula.png" width="70%" alt="Инлайн LaTeX-формула в Jot">
+  <img src="assets/screenshot-formula.png" width="80%" alt="Инлайн LaTeX-формула, отрендеренная вживую в Jot">
+  <br><em>Печатаешь <code>$$…$$</code> — и формула рендерится прямо по месту.</em>
 </p>
 
 ## Инлайн-LaTeX — как это работает
@@ -158,7 +157,7 @@ jot/
 ├── SwiftMath/                 ← вшитый рендерер LaTeX (MIT) + мат-шрифт
 ├── build.sh                   ← сборка: компиляция + иконка + шрифты + подпись (без внешних зависимостей)
 ├── make-dmg.sh                ← упаковка Jot.app в DMG
-├── assets/icon.png            ← иконка (1024², отрисована из кода)
+├── assets/                    ← иконка + скриншоты для README
 ├── AGENTS.md                  ← заметки об архитектуре для контрибьюторов / AI-агентов
 └── Jot.app/Contents/Info.plist
 ```

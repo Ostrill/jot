@@ -100,7 +100,9 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
 - Keep the tree minimal — only build-essential files are tracked. Dev-only scripts and
   internal notes are git-ignored.
 - The app icon is **rendered from code** (that generator lives outside the tracked
-  tree); you don't need it to build — `build.sh` derives all sizes from
-  `assets/icon.png`.
+  tree); you don't need it to build — `build.sh` derives all `.icns` sizes from the
+  full-bleed square art **`assets/icon-source.png`**. `assets/icon.png` is the
+  macOS-rendered (rounded + shadowed) presentation icon used only in the README —
+  never build from it (the system would mask it twice).
 - Commit per feature/fix. This project has no automated tests; verify changes by
   building and running the app.

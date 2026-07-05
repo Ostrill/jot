@@ -9,7 +9,9 @@ set -euo pipefail
 APP="Jot.app"
 BIN="$APP/Contents/MacOS/GlassPanel"
 RES="$APP/Contents/Resources"
-ICON_SRC="assets/icon.png"
+# Full-bleed square art — the build source. (assets/icon.png is the macOS-rendered,
+# rounded/shadowed presentation icon used in the README; do NOT build from that one.)
+ICON_SRC="assets/icon-source.png"
 
 if [[ ! -f "$ICON_SRC" ]]; then
   echo "✗ $ICON_SRC not found" >&2
