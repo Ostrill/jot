@@ -52,15 +52,18 @@ struct PanelSettings {
     var sheenOpacity: CGFloat = 0.01
     var shadowOpacity: CGFloat = 0.0
     var shadowBlur: CGFloat = 0.0
-    var darkeningOpacity: CGFloat = 0.10
-    var colorStrength: CGFloat = 0.0
-    var rainbowHue: CGFloat = 0.0
-    var rainbowEnabled: Bool = false
-    var rainbowSpeed: CGFloat = 0.20
+    // The appearance defaults below are the maintainer's calibrated setup, baked in
+    // so a fresh install opens looking the same as the reference configuration
+    // (rather than the bare AppKit defaults). Kept in sync with the `load` fallbacks.
+    var darkeningOpacity: CGFloat = 0.5952995867768595
+    var colorStrength: CGFloat = 0.1984762396694215
+    var rainbowHue: CGFloat = 0.4089982857132796
+    var rainbowEnabled: Bool = true
+    var rainbowSpeed: CGFloat = 0.05283514616487946
     var alwaysOnTop: Bool = false
-    var editorFontSize: CGFloat = 15.0
-    var textColorStrength: CGFloat = 0.16
-    var textShadowStrength: CGFloat = 0.4   // dark halo behind the text for legibility over any backdrop (0 = off)
+    var editorFontSize: CGFloat = 19.61813446969697
+    var textColorStrength: CGFloat = 0.5045408105713924
+    var textShadowStrength: CGFloat = 0.1968333431523143   // dark halo behind the text for legibility over any backdrop (0 = off)
     var blurStrength: CGFloat = 0.0
     var menuSliderOffset: CGFloat = 25.0
     var wordWrap: Bool = true
@@ -207,15 +210,15 @@ struct PanelSettings {
         self.sheenOpacity = CGFloat(dictionary["sheenOpacity"] as? Double ?? 0.01)
         self.shadowOpacity = CGFloat(dictionary["shadowOpacity"] as? Double ?? 0.0)
         self.shadowBlur = CGFloat(dictionary["shadowBlur"] as? Double ?? 0.0)
-        self.darkeningOpacity = CGFloat(dictionary["darkeningOpacity"] as? Double ?? 0.10)
-        self.colorStrength = CGFloat(dictionary["colorStrength"] as? Double ?? 0.0)
-        self.rainbowHue = CGFloat(dictionary["rainbowHue"] as? Double ?? 0.0)
-        self.rainbowEnabled = dictionary["rainbowEnabled"] as? Bool ?? false
-        self.rainbowSpeed = CGFloat(dictionary["rainbowSpeed"] as? Double ?? 0.20)
+        self.darkeningOpacity = CGFloat(dictionary["darkeningOpacity"] as? Double ?? 0.5952995867768595)
+        self.colorStrength = CGFloat(dictionary["colorStrength"] as? Double ?? 0.1984762396694215)
+        self.rainbowHue = CGFloat(dictionary["rainbowHue"] as? Double ?? 0.4089982857132796)
+        self.rainbowEnabled = dictionary["rainbowEnabled"] as? Bool ?? true
+        self.rainbowSpeed = CGFloat(dictionary["rainbowSpeed"] as? Double ?? 0.05283514616487946)
         self.alwaysOnTop = dictionary["alwaysOnTop"] as? Bool ?? false
-        self.editorFontSize = CGFloat(dictionary["editorFontSize"] as? Double ?? 15.0)
-        self.textColorStrength = CGFloat(dictionary["textColorStrength"] as? Double ?? 0.16)
-        self.textShadowStrength = CGFloat(dictionary["textShadowStrength"] as? Double ?? 0.4)
+        self.editorFontSize = CGFloat(dictionary["editorFontSize"] as? Double ?? 19.61813446969697)
+        self.textColorStrength = CGFloat(dictionary["textColorStrength"] as? Double ?? 0.5045408105713924)
+        self.textShadowStrength = CGFloat(dictionary["textShadowStrength"] as? Double ?? 0.1968333431523143)
         self.blurStrength = CGFloat(dictionary["blurStrength"] as? Double ?? 0.0)
         self.menuSliderOffset = CGFloat(dictionary["menuSliderOffset"] as? Double ?? 25.0)
         self.wordWrap = dictionary["wordWrap"] as? Bool ?? true
