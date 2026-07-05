@@ -60,6 +60,7 @@ struct PanelSettings {
     var alwaysOnTop: Bool = false
     var editorFontSize: CGFloat = 15.0
     var textColorStrength: CGFloat = 0.16
+    var textShadowStrength: CGFloat = 0.4   // dark halo behind the text for legibility over any backdrop (0 = off)
     var blurStrength: CGFloat = 0.0
     var menuSliderOffset: CGFloat = 25.0
     var wordWrap: Bool = true
@@ -142,6 +143,19 @@ struct PanelSettings {
         return NSColor.white.blended(withFraction: 0.10, of: reference) ?? .white
     }
 
+    /// A soft, centred dark halo drawn behind the glyphs so the text stays legible
+    /// over any backdrop (light or dark) showing through the glass — the subtitle
+    /// trick. A single flat colour can't be readable everywhere; this is why. Fully
+    /// transparent (no shadow) when the strength is 0.
+    var editorTextShadow: NSShadow {
+        let s = max(0.0, min(1.0, textShadowStrength))
+        let shadow = NSShadow()
+        shadow.shadowOffset = .zero
+        shadow.shadowBlurRadius = s <= 0.001 ? 0.0 : 2.0 + (14.0 * s)
+        shadow.shadowColor = s <= 0.001 ? nil : NSColor.black.withAlphaComponent(0.6 + (0.4 * s))
+        return shadow
+    }
+
     var documentIndicatorColor: NSColor {
         let reference = accentReferenceColor
         return NSColor.white.blended(withFraction: 0.55, of: reference) ?? reference
@@ -201,6 +215,7 @@ struct PanelSettings {
         self.alwaysOnTop = dictionary["alwaysOnTop"] as? Bool ?? false
         self.editorFontSize = CGFloat(dictionary["editorFontSize"] as? Double ?? 15.0)
         self.textColorStrength = CGFloat(dictionary["textColorStrength"] as? Double ?? 0.16)
+        self.textShadowStrength = CGFloat(dictionary["textShadowStrength"] as? Double ?? 0.4)
         self.blurStrength = CGFloat(dictionary["blurStrength"] as? Double ?? 0.0)
         self.menuSliderOffset = CGFloat(dictionary["menuSliderOffset"] as? Double ?? 25.0)
         self.wordWrap = dictionary["wordWrap"] as? Bool ?? true
@@ -234,6 +249,7 @@ struct PanelSettings {
             "alwaysOnTop": alwaysOnTop,
             "editorFontSize": editorFontSize,
             "textColorStrength": textColorStrength,
+            "textShadowStrength": textShadowStrength,
             "blurStrength": blurStrength,
             "menuSliderOffset": menuSliderOffset,
             "wordWrap": wordWrap,
@@ -553,6 +569,23 @@ extension NSImage {
         result.unlockFocus()
         return result
     }
+
+    /// Returns a copy enlarged by `padding` on every side with a soft dark halo (from
+    /// `shadow`) drawn behind the opaque glyphs — the image equivalent of the text's
+    /// `.shadow`, so a rendered formula stays legible over any backdrop. No-op when
+    /// there's no padding/shadow.
+    func haloed(shadow: NSShadow, padding: CGFloat) -> NSImage {
+        guard padding > 0.0, shadow.shadowColor != nil else { return self }
+        let result = NSImage(size: NSSize(width: size.width + padding * 2.0, height: size.height + padding * 2.0))
+        result.lockFocus()
+        NSGraphicsContext.saveGraphicsState()
+        shadow.set()
+        draw(in: NSRect(x: padding, y: padding, width: size.width, height: size.height),
+             from: NSRect(origin: .zero, size: size), operation: .sourceOver, fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+        result.unlockFocus()
+        return result
+    }
 }
 
 /// A rendered formula embedded inline in the text. Stores its LaTeX source so
@@ -561,25 +594,32 @@ extension NSImage {
 final class MathAttachment: NSTextAttachment {
     let latex: String
     private let baseImage: NSImage          // white shape, kept for cheap retinting
-    private let verticalOffset: CGFloat
-    private let renderedSize: NSSize
+    private let fontMid: CGFloat            // text mid-line, to re-centre when the size changes
+    private var verticalOffset: CGFloat = 0.0
+    private var renderedSize: NSSize = .zero
 
-    init(latex: String, baseImage: NSImage, font: NSFont, tint: NSColor) {
+    init(latex: String, baseImage: NSImage, font: NSFont, tint: NSColor, shadow: NSShadow) {
         self.latex = latex
         self.baseImage = baseImage
-        self.renderedSize = baseImage.size
         // Center the formula image vertically on the text's mid-line.
-        let fontMid = (font.ascender + font.descender) / 2.0
-        self.verticalOffset = fontMid - (baseImage.size.height / 2.0)
+        self.fontMid = (font.ascender + font.descender) / 2.0
         super.init(data: nil, ofType: nil)
-        self.image = baseImage.recolored(to: tint)
+        applyTint(tint, shadow: shadow)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Re-tints the rendered image to `color`, preserving size (no relayout).
-    func applyTint(_ color: NSColor) {
-        self.image = baseImage.recolored(to: color)
+    /// Re-tints the rendered image to `color` and bakes the legibility halo into it:
+    /// the layout manager doesn't apply the text `.shadow` attribute to attachment
+    /// images, so the glow has to live in the bitmap. The image (and thus the
+    /// attachment's size) grows to fit the halo, but the glyph stays centred on the
+    /// text mid-line. At shadow-strength 0 there's no padding, so size is unchanged.
+    func applyTint(_ color: NSColor, shadow: NSShadow) {
+        let pad: CGFloat = shadow.shadowColor == nil ? 0.0 : ceil(shadow.shadowBlurRadius) + 2.0
+        let img = baseImage.recolored(to: color).haloed(shadow: shadow, padding: pad)
+        self.image = img
+        self.renderedSize = img.size
+        self.verticalOffset = fontMid - (img.size.height / 2.0)
     }
 
     override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect, glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
@@ -1182,7 +1222,7 @@ final class GlassEditorView: NSView {
             let raw = MathSyntax.latex(of: span, in: ns)
             if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                let base = MathRenderer.renderInlineBase(latex: raw, fontSize: settings.editorFontSize) {
-                result.append(NSAttributedString(attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint)))
+                result.append(NSAttributedString(attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint, shadow: settings.editorTextShadow)))
             } else {
                 result.append(NSAttributedString(string: ns.substring(with: span), attributes: baseAttrs))
             }
@@ -1640,7 +1680,7 @@ extension GlassEditorView: MathEditingHost {
             newLength = 0
         } else if let base = MathRenderer.renderInlineBase(latex: raw, fontSize: settings.editorFontSize) {
             storage.replaceCharacters(in: span, with: NSAttributedString(
-                attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint)))
+                attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint, shadow: settings.editorTextShadow)))
             newLength = 1
         } else {
             return caret   // invalid LaTeX → leave the raw source in place
@@ -1756,7 +1796,11 @@ extension GlassEditorView: MathEditingHost {
         // see §7). Baking the stale settings color here made the backdrop flash to a frozen
         // hue for one frame on every keystroke — the returned text-color flicker.
         let backdropColor = backdropTextView.textColor ?? settings.backdropTextColor
-        copy.addAttributes([.font: editorFont, .foregroundColor: backdropColor], range: full)
+        // The halo lives ONLY on this near-opaque backdrop layer, never on the
+        // translucent editor glyphs on top: a shadow drawn under a translucent glyph
+        // shows through and dims it. Here the ~0.94-opaque backdrop glyph covers the
+        // dark shadow under the letter, so only the halo *around* the text remains.
+        copy.addAttributes([.font: editorFont, .foregroundColor: backdropColor, .shadow: settings.editorTextShadow], range: full)
         backStorage.setAttributedString(copy)
     }
 
@@ -1765,11 +1809,15 @@ extension GlassEditorView: MathEditingHost {
     /// both the editor and its backdrop copies, then redraws.
     private func recolorFormulas(to color: NSColor) {
         guard let editorStorage = editorTextView.textStorage else { return }
+        let shadow = settings.editorTextShadow
         let full = NSRange(location: 0, length: editorStorage.length)
         var tinted: [(NSRange, NSImage)] = []
+        var sizeChanged = false
         editorStorage.enumerateAttribute(.attachment, in: full, options: []) { value, range, _ in
             guard let att = value as? MathAttachment else { return }
-            att.applyTint(color)
+            let before = att.image?.size
+            att.applyTint(color, shadow: shadow)
+            if att.image?.size != before { sizeChanged = true }
             if let img = att.image { tinted.append((range, img)) }
         }
         guard !tinted.isEmpty else { return }
@@ -1781,8 +1829,22 @@ extension GlassEditorView: MathEditingHost {
                 (backStorage.attribute(.attachment, at: range.location, effectiveRange: nil) as? NSTextAttachment)?.image = img
             }
         }
+        // Baking the halo changes the attachment image size; the layout manager caches
+        // glyph metrics, so a size change needs an explicit relayout. Skipped when only
+        // the tint changed (e.g. every Rainbow frame) so that path stays cheap.
+        if sizeChanged {
+            relayoutAttachments(in: editorTextView)
+            relayoutAttachments(in: backdropTextView)
+        }
         editorTextView.needsDisplay = true
         backdropTextView.needsDisplay = true
+    }
+
+    private func relayoutAttachments(in textView: NSTextView) {
+        guard let lm = textView.layoutManager, let tc = textView.textContainer,
+              let length = textView.textStorage?.length else { return }
+        lm.invalidateLayout(forCharacterRange: NSRange(location: 0, length: length), actualCharacterRange: nil)
+        lm.ensureLayout(for: tc)
     }
 
     private func syncTextLayersAndLayout() {
@@ -2077,6 +2139,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.settings.textColorStrength = CGFloat(value)
             self?.applySettings()
         }
+
+        addSlider(
+            to: appearanceMenu,
+            key: "textShadowStrength",
+            title: "Text Shadow",
+            range: 0.0 ... 1.0,
+            value: settings.textShadowStrength
+        ) { [weak self] value in
+            self?.settings.textShadowStrength = CGFloat(value)
+            self?.applySettings()
+        }
     }
 
     private func normalizeFixedSettings() {
@@ -2302,6 +2375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sliderViews["rainbowSpeed"]?.doubleValue = settings.rainbowSpeed
         sliderViews["editorFontSize"]?.doubleValue = settings.editorFontSize
         sliderViews["textColorStrength"]?.doubleValue = settings.textColorStrength
+        sliderViews["textShadowStrength"]?.doubleValue = settings.textShadowStrength
     }
 
     private func updateRainbowTimer() {
