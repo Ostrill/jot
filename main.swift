@@ -1992,7 +1992,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func setupWindow() {
-        let initialFrame = NSRect(x: 0.0, y: 0.0, width: 425.0, height: 295.0)
+        let initialFrame = NSRect(x: 0.0, y: 0.0, width: 637.5, height: 442.5)   // 1.5× the previous 425×295
         window = makeWindow(frame: initialFrame, editorView: editorView)
         window.center()
     }
