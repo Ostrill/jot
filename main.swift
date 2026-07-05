@@ -1905,6 +1905,10 @@ final class JotDocument: NSDocument {
 final class JotWindowController: NSWindowController {
     let editorView = GlassEditorView(frame: .zero)
 
+    /// Top-left of the last opened window, so each new one cascades from it instead of
+    /// stacking exactly on top. Reset to `.zero` seeds the first window at screen centre.
+    private static var nextCascadePoint = NSPoint.zero
+
     init() {
         let window = PanelWindow(
             contentRect: NSRect(x: 0.0, y: 0.0, width: 637.5, height: 442.5),
@@ -1932,7 +1936,14 @@ final class JotWindowController: NSWindowController {
 
         shouldCascadeWindows = false
         window.contentView = editorView
-        window.center()
+        // Cascade each new window from the previous one (Cmd-N no longer stacks them
+        // exactly). cascadeTopLeft wraps back near the top when it reaches a screen edge.
+        if JotWindowController.nextCascadePoint == .zero {
+            window.center()
+            JotWindowController.nextCascadePoint = window.cascadeTopLeft(from: .zero)
+        } else {
+            JotWindowController.nextCascadePoint = window.cascadeTopLeft(from: JotWindowController.nextCascadePoint)
+        }
 
         editorView.onTextDidChange = { [weak self] in
             (self?.document as? NSDocument)?.updateChangeCount(.changeDone)
