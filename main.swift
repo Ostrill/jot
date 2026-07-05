@@ -1420,6 +1420,10 @@ extension GlassEditorView: NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        // A non-empty selection means the user is selecting text — don't reconcile.
+        // reconcileMath() collapses the selection to a caret, which used to make
+        // any selection vanish the instant it was made.
+        guard editorTextView.selectedRange().length == 0 else { return }
         scheduleReconcile()
     }
 
@@ -1565,6 +1569,11 @@ extension GlassEditorView: MathEditingHost {
             if mathEditRange != nil { mathEditRange = nil; hideMathPreview(); clearMathHighlight() }
             return
         }
+        // Never touch a live selection. The setSelectedRange below collapses to a
+        // caret, so running this while the user has text selected would wipe the
+        // selection out from under them.
+        guard editorTextView.selectedRange().length == 0 else { return }
+
         isReconciling = true
         isProcessingMath = true
         defer { isProcessingMath = false; isReconciling = false }
