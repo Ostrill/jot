@@ -29,3 +29,12 @@
 # ─── Compiled Swift artifacts ────────────────────────────
 *.o
 *.swiftmodule
+
+# ─── Release artifacts (built by make-dmg.sh) ────────────
+*.dmg
+
+# ─── Dev-only build scripts & internal docs (kept local) ─
+# Users build with ./build.sh; agents read AGENTS.md.
+/rebuild.sh
+/rebuild_with_icon.sh
+/PROJECT_DOCUMENTATION.md
