@@ -1856,16 +1856,127 @@ extension GlassEditorView: MathEditingHost {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    private var window: PanelWindow!
-    private var editorView = GlassEditorView(frame: .zero)
+// MARK: - Document architecture (NSDocument)
+//
+// Each open file (or untitled scratch) is a JotDocument with one JotWindowController
+// hosting a GlassEditorView. NSDocumentController then gives us New/Open/Save, the
+// save-on-quit / save-on-close review, and multiple windows for free. Appearance
+// (glass look, Rainbow) stays app-wide: AppDelegate owns it and broadcasts to every
+// open editor.
+
+@objc(JotDocument)
+final class JotDocument: NSDocument {
+    /// Source of truth for the text before a window exists / after it closes; while a
+    /// window is open the editor holds the live copy (pulled back in `data(ofType:)`).
+    var text: String = ""
+
+    override class var autosavesInPlace: Bool { false }
+
+    override func makeWindowControllers() {
+        let controller = JotWindowController()
+        addWindowController(controller)
+        controller.loadText(text)
+    }
+
+    override func data(ofType typeName: String) throws -> Data {
+        if let editor = (windowControllers.first as? JotWindowController)?.editorView {
+            text = editor.text          // capture unsaved edits from the live editor
+        }
+        return Data(text.utf8)
+    }
+
+    override func read(from data: Data, ofType typeName: String) throws {
+        text = String(decoding: data, as: UTF8.self)
+        // On revert the window already exists — push the reloaded text into it.
+        (windowControllers.first as? JotWindowController)?.loadText(text)
+    }
+
+    /// Runs on every edit (`.changeDone`) and on save (`.changeCleared`), so it's the
+    /// one place to keep the custom "✶ filename" status block in sync (the window's own
+    /// titlebar is hidden, so the standard edited dot isn't visible).
+    override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        super.updateChangeCount(change)
+        for controller in windowControllers.compactMap({ $0 as? JotWindowController }) {
+            controller.editorView.setDocumentPresentation(fileURL: fileURL, isEdited: isDocumentEdited)
+        }
+    }
+}
+
+final class JotWindowController: NSWindowController {
+    let editorView = GlassEditorView(frame: .zero)
+
+    init() {
+        let window = PanelWindow(
+            contentRect: NSRect(x: 0.0, y: 0.0, width: 637.5, height: 442.5),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = true
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        window.minSize = NSSize(width: 360.0, height: 240.0)
+        // A transparent, empty unified toolbar raises the titlebar height so AppKit
+        // itself lays the traffic lights out lower and inset — clear of our big rounded
+        // corner, hover tracking intact. (A titlebar *accessory* did NOT grow it; and do
+        // not use setFrameOrigin — it desyncs the buttons' hover zones.)
+        let toolbar = NSToolbar(identifier: "JotToolbar")
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
+
+        super.init(window: window)          // phase 2 — self / editorView now usable
+
+        shouldCascadeWindows = false
+        window.contentView = editorView
+        window.center()
+
+        editorView.onTextDidChange = { [weak self] in
+            (self?.document as? NSDocument)?.updateChangeCount(.changeDone)
+        }
+
+        // Traffic lights are positioned by AppKit; we only reflow the status block that
+        // tracks them. Observe the window directly (NOT as its delegate) so NSDocument
+        // keeps ownership of the window's unsaved-changes close review.
+        let nc = NotificationCenter.default
+        for name in [NSWindow.didResizeNotification, NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
+            nc.addObserver(self, selector: #selector(reflowTitlebar), name: name, object: window)
+        }
+
+        // Adopt the app-wide appearance for this fresh window.
+        (NSApp.delegate as? AppDelegate)?.register(self)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    /// Loads text into the editor, seeds the status block, and focuses the editor.
+    func loadText(_ text: String) {
+        editorView.setText(text)
+        if let document = document as? JotDocument {
+            editorView.setDocumentPresentation(fileURL: document.fileURL, isEdited: document.isDocumentEdited)
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.reflowTitlebar()
+            self?.editorView.focusEditor()
+        }
+    }
+
+    @objc private func reflowTitlebar() {
+        editorView.needsLayout = true
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appearanceMenu = NSMenu(title: "Appearance")
     private let formatMenu = NSMenu(title: "Format")
     private let defaults = UserDefaults.standard
     private var settings = PanelSettings(defaults: .standard)
     private var rainbowTimer: Timer?
-    private var currentFileURL: URL?
-    private var isDocumentEdited = false
     private var lastAnimatedTextHue: CGFloat = 0.0
 
     private var alwaysOnTopItem: NSMenuItem!
@@ -1875,22 +1986,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var renderFormulasItem: NSMenuItem!
 
     private var sliderViews: [String: SliderMenuItemView] = [:]
-    private var pendingFocusRestore = false
-    private let ciContext = CIContext()
+
+    /// Every open document window's editor, for broadcasting appearance + Rainbow.
+    private var allEditorViews: [GlassEditorView] {
+        NSApp.windows.compactMap { ($0.windowController as? JotWindowController)?.editorView }
+    }
+
+    /// Applies the current app-wide appearance to a freshly opened window.
+    func register(_ controller: JotWindowController) {
+        controller.editorView.settings = settings
+        controller.window?.level = settings.alwaysOnTop ? .floating : .normal
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         normalizeFixedSettings()
-        setupWindow()
         setupMainMenu()
-        bindEditorView(editorView)
         applySettings()
-
-        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.async { [weak self] in
-            self?.positionTrafficLights()
-        }
         clearCustomFinderIcon()
+        // No window is created here: this is a document-based app, so NSDocumentController
+        // opens an untitled document (and its window) on launch, and handles opening files.
     }
 
     private func clearCustomFinderIcon() {
@@ -1904,22 +2019,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
-    }
-
-    func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        guard let firstPath = filenames.first else {
-            sender.reply(toOpenOrPrint: .failure)
-            return
-        }
-
-        let fileURL = URL(fileURLWithPath: firstPath)
-        openDocument(at: fileURL)
-        sender.reply(toOpenOrPrint: .success)
-    }
-
-    @objc private func showWindow(_ sender: Any?) {
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func toggleAlwaysOnTop(_ sender: Any?) {
@@ -1974,71 +2073,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeFileMenu() -> NSMenu {
         let menu = NSMenu(title: "File")
-
-        let openItem = NSMenuItem(title: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
-        openItem.target = self
-        menu.addItem(openItem)
+        // Standard document actions with no explicit target → they travel the responder
+        // chain to NSDocumentController / the key window's NSDocument.
+        menu.addItem(NSMenuItem(title: "New", action: #selector(NSDocumentController.newDocument(_:)), keyEquivalent: "n"))
+        menu.addItem(NSMenuItem(title: "Open…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o"))
         menu.addItem(.separator())
-
-        let saveItem = NSMenuItem(title: "Save", action: #selector(saveDocument(_:)), keyEquivalent: "s")
-        saveItem.target = self
-        menu.addItem(saveItem)
-
-        let saveAsItem = NSMenuItem(title: "Save As…", action: #selector(saveDocumentAs(_:)), keyEquivalent: "S")
-        saveAsItem.target = self
-        menu.addItem(saveAsItem)
-
+        menu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        menu.addItem(NSMenuItem(title: "Save", action: #selector(NSDocument.save(_:)), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Save As…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S"))
         return menu
-    }
-
-    private func setupWindow() {
-        let initialFrame = NSRect(x: 0.0, y: 0.0, width: 637.5, height: 442.5)   // 1.5× the previous 425×295
-        window = makeWindow(frame: initialFrame, editorView: editorView)
-        window.center()
-    }
-
-    private func bindEditorView(_ view: GlassEditorView) {
-        view.onTextDidChange = { [weak self] in
-            guard let self, !self.isDocumentEdited else { return }
-            self.markDocumentEdited(true)
-        }
-    }
-
-    private func makeWindow(frame: NSRect, editorView: GlassEditorView) -> PanelWindow {
-        let newWindow = PanelWindow(
-            contentRect: frame,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        newWindow.delegate = self
-        newWindow.backgroundColor = .clear
-        newWindow.isOpaque = false
-        newWindow.hasShadow = true
-        newWindow.title = currentFileURL?.lastPathComponent ?? "Jot"
-        newWindow.titleVisibility = .hidden
-        newWindow.titlebarAppearsTransparent = true
-        newWindow.isMovableByWindowBackground = true
-        newWindow.isReleasedWhenClosed = false
-        newWindow.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
-        newWindow.minSize = NSSize(width: 360.0, height: 240.0)
-        newWindow.level = settings.alwaysOnTop ? .floating : .normal
-        newWindow.representedURL = currentFileURL
-        newWindow.contentView = editorView
-        installTitlebarToolbar(in: newWindow)
-        return newWindow
-    }
-
-    // A transparent, empty unified toolbar raises the titlebar height so AppKit
-    // itself lays the traffic lights out lower and more inset — clearing our big
-    // rounded corner while keeping their hover tracking intact (AppKit owns the
-    // positioning). The toolbar shows nothing; our fullSizeContentView glass
-    // covers the titlebar area. (A titlebar *accessory* did NOT grow the titlebar
-    // — measured: it left the buttons at the default 9,9.)
-    private func installTitlebarToolbar(in window: NSWindow) {
-        let toolbar = NSToolbar(identifier: "JotToolbar")
-        window.toolbar = toolbar
-        window.toolbarStyle = .unified
     }
 
     private func setupFormatMenu() {
@@ -2216,96 +2259,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sliderViews[key] = view
     }
 
-    @objc private func saveDocument(_ sender: Any?) {
-        if let currentFileURL {
-            saveEditorText(to: currentFileURL)
-        } else {
-            saveDocumentAs(sender)
-        }
-    }
-
-    @objc private func openDocument(_ sender: Any?) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.plainText]
-        panel.directoryURL = currentFileURL?.deletingLastPathComponent() ?? FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-
-        panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.pendingFocusRestore = true
-            self?.openDocument(at: url)
-            self?.scheduleFocusFallback()
-        }
-    }
-
-    @objc private func saveDocumentAs(_ sender: Any?) {
-        let panel = NSSavePanel()
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-        panel.nameFieldStringValue = currentFileURL?.lastPathComponent ?? "Untitled.txt"
-        panel.allowedContentTypes = [.plainText]
-        panel.directoryURL = currentFileURL?.deletingLastPathComponent() ?? FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-
-        panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.pendingFocusRestore = true
-            self?.saveEditorText(to: url)
-            self?.scheduleFocusFallback()
-        }
-    }
-
-    private func scheduleFocusFallback() {
-        // Fires only if windowDidBecomeKey didn't already handle focus restoration.
-        // Sheets sometimes don't cause the parent window to emit didBecomeKey.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, self.pendingFocusRestore else { return }
-            self.pendingFocusRestore = false
-            self.positionTrafficLights()
-            self.window.makeFirstResponder(nil)
-            DispatchQueue.main.async { [weak self] in
-                self?.editorView.focusEditor()
-            }
-        }
-    }
-
-    private func saveEditorText(to url: URL) {
-        do {
-            try editorView.text.write(to: url, atomically: true, encoding: .utf8)
-            currentFileURL = url
-            window.representedURL = url
-            window.title = url.lastPathComponent
-            markDocumentEdited(false)
-        } catch {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Could not save file"
-            alert.informativeText = error.localizedDescription
-            alert.beginSheetModal(for: window)
-        }
-    }
-
-    private func openDocument(at url: URL) {
-        do {
-            let text = try String(contentsOf: url, encoding: .utf8)
-            editorView.setText(text)
-            currentFileURL = url
-            window.representedURL = url
-            window.title = url.lastPathComponent
-            isDocumentEdited = false
-            editorView.setDocumentPresentation(fileURL: url, isEdited: false)
-            positionTrafficLights()
-            editorView.needsLayout = true
-        } catch {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Could not open file"
-            alert.informativeText = error.localizedDescription
-            alert.beginSheetModal(for: window)
-        }
-    }
-
     @objc private func toggleWordWrap(_ sender: Any?) {
         settings.wordWrap.toggle()
         applySettings()
@@ -2313,8 +2266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func toggleRenderFormulas(_ sender: Any?) {
         settings.renderInlineFormulas.toggle()
-        applySettings()                         // pushes the setting into editorView
-        editorView.reprocessFormulaRendering()  // re-render or un-render the current document
+        applySettings()                                     // pushes the setting into every editor
+        for view in allEditorViews { view.reprocessFormulaRendering() }
     }
 
     @objc private func toggleWrapGuides(_ sender: Any?) {
@@ -2322,40 +2275,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         applySettings()
     }
 
-    func windowDidBecomeKey(_ notification: Notification) {
-        guard pendingFocusRestore else { return }
-        pendingFocusRestore = false
-        positionTrafficLights()
-        window.makeFirstResponder(nil)
-        DispatchQueue.main.async { [weak self] in
-            self?.editorView.focusEditor()
-        }
-    }
-
-    func windowDidResize(_ notification: Notification) {
-        positionTrafficLights()
-    }
-
-    func windowDidEnterFullScreen(_ notification: Notification) {
-        positionTrafficLights()
-    }
-
-    func windowDidExitFullScreen(_ notification: Notification) {
-        positionTrafficLights()
-    }
-
-    // Traffic lights are positioned by AppKit (via the tall titlebar accessory);
-    // we only need to re-flow the status block, which tracks their position.
-    private func positionTrafficLights() {
-        editorView.needsLayout = true
-    }
-
     private func applySettings() {
         settings.save(to: defaults)
         lastAnimatedTextHue = settings.rainbowHue
-        window.level = settings.alwaysOnTop ? .floating : .normal
-        editorView.settings = settings
-        editorView.setDocumentPresentation(fileURL: currentFileURL, isEdited: isDocumentEdited)
+        for view in allEditorViews { view.settings = settings }
+        for window in NSApp.windows where window.windowController is JotWindowController {
+            window.level = settings.alwaysOnTop ? .floating : .normal
+        }
         updateMenuState()
         updateRainbowTimer()
     }
@@ -2395,7 +2321,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             let hueDelta = self.circularHueDistance(from: self.lastAnimatedTextHue, to: self.settings.rainbowHue)
             let shouldRefreshTextTint = hueDelta >= 0.025
-            self.editorView.applyAnimatedColorUpdate(self.settings, refreshEditorTint: shouldRefreshTextTint)
+            for view in self.allEditorViews {
+                view.applyAnimatedColorUpdate(self.settings, refreshEditorTint: shouldRefreshTextTint)
+            }
             if shouldRefreshTextTint {
                 self.lastAnimatedTextHue = self.settings.rainbowHue
             }
@@ -2411,13 +2339,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return min(delta, 1.0 - delta)
     }
 
-    private func markDocumentEdited(_ edited: Bool) {
-        guard isDocumentEdited != edited else { return }
-        isDocumentEdited = edited
-        editorView.setDocumentPresentation(fileURL: currentFileURL, isEdited: edited)
-        positionTrafficLights()
-        editorView.needsLayout = true
-    }
 }
 
 let application = NSApplication.shared
