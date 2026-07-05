@@ -822,6 +822,17 @@ final class GlassEditorView: NSView {
 
     var onTextDidChange: (() -> Void)?
 
+    // MARK: Inactive-window transparency
+    //
+    // The WindowServer renders NSGlassEffectView "subdued" (that milky, near-opaque
+    // look) whenever its window isn't key — decided at composite time by the system, so
+    // there is no app-side lever to keep the glass truly live. (Verified at runtime: the
+    // view's private state is byte-for-byte identical active vs inactive.) The best we
+    // can do with public API is lower the *whole window's* opacity when it's inactive,
+    // so the desktop shows through and it reads as semi-transparent rather than an opaque
+    // plate. Tune to taste.
+    private static let inactiveWindowAlpha: CGFloat = 0.8
+
     private let glassContainer = NSGlassEffectContainerView(frame: .zero)
     private let glassView = NSGlassEffectView(frame: .zero)
     private let contentHost = NSView(frame: .zero)
@@ -1127,6 +1138,31 @@ final class GlassEditorView: NSView {
         layer?.shadowOpacity = Float(settings.shadowOpacity)
         layer?.shadowRadius = settings.shadowBlur
         layer?.shadowOffset = CGSize(width: 0.0, height: -8.0)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        let nc = NotificationCenter.default
+        nc.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+        nc.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        guard let window else { return }
+        nc.addObserver(self, selector: #selector(windowActiveStateChanged), name: NSWindow.didBecomeKeyNotification, object: window)
+        nc.addObserver(self, selector: #selector(windowActiveStateChanged), name: NSWindow.didResignKeyNotification, object: window)
+        applyGlassActiveState()
+    }
+
+    @objc private func windowActiveStateChanged() {
+        applyGlassActiveState()
+    }
+
+    /// An inactive window can't keep the live glass (the system forces it opaque/frosted),
+    /// so instead make the whole window semi-transparent when it loses focus — the desktop
+    /// shows through and it stops reading as a heavy opaque plate.
+    private func applyGlassActiveState() {
+        guard let window else { return }
+        window.alphaValue = window.isKeyWindow ? 1.0 : Self.inactiveWindowAlpha
     }
 
     func applyAnimatedColorUpdate(_ updatedSettings: PanelSettings, refreshEditorTint: Bool) {
