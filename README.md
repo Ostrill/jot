@@ -35,14 +35,14 @@ whole app is one `main.swift` plus a vendored copy of
 
 ## Features
 
-- 🪟 **Liquid Glass window** — a genuine frosted-glass editor built on public AppKit APIs.
-- 🧮 **Inline LaTeX** — type `$$…$$` and it renders live via SwiftMath. Auto-closing
+- `🧊` **Liquid Glass window** — a genuine frosted-glass editor built on public AppKit APIs.
+- `🧮` **Inline LaTeX** — type `$$…$$` and it renders live via SwiftMath. Auto-closing
   delimiters, multi-line formulas, and byte-for-byte source round-trip when you save.
-- 🌈 **Rainbow Mode** — smoothly animates the glass tint (and the text) through the hue wheel.
-- 🎛 **Appearance controls** — darkening, color strength, hue, rainbow speed, text opacity, always-on-top.
-- 📐 **Word wrap + wrapped-line guides** — subtle markers show where long lines were folded.
-- 💾 **Plain-text files** — open/save with an unsaved-changes indicator (`✶`).
-- ⚡️ **Native & self-contained** — one Swift file, no Xcode required to build.
+- `🌈` **Rainbow Mode** — smoothly animates the glass tint (and the text) through the hue wheel.
+- `⚙️` **Appearance controls** — darkening, color strength, hue, rainbow speed, text opacity, always-on-top.
+- `📏` **Word wrap + wrapped-line guides** — subtle markers show where long lines were folded.
+- `📄` **Plain-text files** — open/save with an unsaved-changes indicator (`✶`).
+- `⚡️` **Native, fast, self-contained** — one Swift file, no Xcode required to build.
 
 ## Screenshots
 
@@ -78,12 +78,12 @@ Notes:
 
 ## Menus & shortcuts
 
-| Action        | Shortcut |
-|---------------|----------|
-| Open…         | ⌘O       |
-| Save          | ⌘S       |
-| Save As…      | ⇧⌘S      |
-| Quit Jot      | ⌘Q       |
+| Action    | Shortcut |
+|-----------|----------|
+| Open…     | <kbd>⌘</kbd> + <kbd>O</kbd> |
+| Save      | <kbd>⌘</kbd> + <kbd>S</kbd> |
+| Save As…  | <kbd>⇧</kbd> + <kbd>⌘</kbd> + <kbd>S</kbd> |
+| Quit Jot  | <kbd>⌘</kbd> + <kbd>Q</kbd> |
 
 - **Format:** Font Size (slider), Word Wrap, Wrapped Line Guides, Render LaTeX Formulas
 - **Appearance:** Always on Top, Rainbow Mode, Darkening, Color Strength, Hue, Rainbow Speed, Text Opacity
@@ -120,9 +120,9 @@ your own Mac's architecture.
 ```bash
 git clone https://github.com/Ostrill/jot.git
 cd jot
-./build.sh                 # compiles main.swift + SwiftMath, builds the icon, bundles fonts, ad-hoc signs
-open Jot.app               # smoke-test
-cp -R Jot.app /Applications/   # install
+./build.sh                    # compiles main.swift + SwiftMath, builds the icon, bundles fonts, ad-hoc signs
+open Jot.app                  # smoke-test
+cp -R Jot.app /Applications/  # install
 ```
 
 `build.sh` compiles `main.swift` together with the vendored SwiftMath sources,
@@ -132,8 +132,8 @@ generates the app icon with `sips`/`iconutil`, copies the math font bundle into
 ### Building a DMG for a release
 
 ```bash
-./build.sh        # build the app first
-./make-dmg.sh     # produces Jot-<version>.dmg
+./build.sh     # build the app first
+./make-dmg.sh  # produces Jot-<version>.dmg
 ```
 
 ## Why isn't the download signed / notarized?
@@ -149,12 +149,12 @@ afterwards — the notarization step only removes the first-launch prompt.
 
 ```
 jot/
-├── main.swift                 ← the entire app (~2000 lines)
-├── SwiftMath/                 ← vendored LaTeX renderer (MIT) + math font
-├── build.sh                   ← build: compile + icon + bundle fonts + sign (no external deps)
-├── make-dmg.sh                ← package Jot.app into a DMG
-├── assets/                    ← app icon + README screenshots
-├── AGENTS.md                  ← architecture notes for contributors / AI agents
+├── main.swift   ← the entire app (~2000 lines)
+├── SwiftMath/   ← vendored LaTeX renderer (MIT) + math font
+├── build.sh     ← build: compile + icon + bundle fonts + sign (no external deps)
+├── make-dmg.sh  ← package Jot.app into a DMG
+├── assets/      ← app icon + README screenshots
+├── AGENTS.md    ← architecture notes for contributors / AI agents
 └── Jot.app/Contents/Info.plist
 ```
 
