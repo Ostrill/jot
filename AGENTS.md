@@ -74,12 +74,29 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
 
 ## Non-obvious pitfalls (read before editing)
 
-1. **Two-layer text system + blink timer.** Text is drawn across an editor layer and
-   a backdrop layer; the insertion-point blink timer is fragile. Mutating settings the
-   wrong way can freeze the caret blink or flicker text color. Prefer updating the
-   view's live color over re-baking settings on every keystroke.
+1. **Two-layer text system.** Text is drawn twice: a near-opaque *backdrop* layer and
+   the translucent editor glyphs on top. Both are layout managers over **one shared
+   `NSTextStorage`**, so the backdrop mirrors edits for free — never give the backdrop
+   its own text, font or colour (setting `NSTextView.textColor`/`.string` on it would
+   write into the shared storage). Its colour and the legibility halo are forced at
+   draw time by `BackdropLayoutManager.showCGGlyphs`; the halo lives there and **only**
+   there, because a shadow under a translucent glyph shows through and dims it.
+   The insertion-point blink timer is fragile: mutating settings the wrong way can
+   freeze the caret blink or flicker text colour. Prefer updating the view's live
+   colour over re-baking settings on every keystroke.
 
-2. **LaTeX = one parser + a deferred reconciler.**
+2. **Anything per-keystroke must stay O(edit), not O(document).** Three separate
+   full-document passes used to run on every character typed, and each was ~100× more
+   expensive than the edit itself. In particular:
+   - **Assigning `NSTextContainer.size` invalidates the layout of the whole document.**
+     Write it only when it actually changes (`syncEditorLayout`), or the following
+     `ensureLayout` re-lays out the entire file.
+   - Rewriting an attribute over the whole storage (the old math highlight) invalidates
+     the whole layout with it — repaint only the range whose colour changes.
+   - `MathSyntax.completeSpans` walks the document; parse once per reconcile and pass
+     the result around.
+
+3. **LaTeX = one parser + a deferred reconciler.**
    - `MathSyntax` is the single escape-aware parser (`\$` = literal dollar) used for
      load, serialize, and live editing. Formula source is stored **byte-for-byte** so
      files round-trip exactly. Multi-line formulas are allowed (Enter inserts a
@@ -92,21 +109,32 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
    - Rendering is gated by `settings.renderInlineFormulas` (Format ▸ "Render LaTeX
      Formulas").
 
-3. **Traffic lights are positioned by AppKit.** They are lowered by giving the window
+4. **Traffic lights are positioned by AppKit.** They are lowered by giving the window
    an **empty, transparent unified toolbar** (`installTitlebarToolbar`), which grows
    the titlebar so AppKit itself lays the buttons out clear of the large corner radius.
    Do **not** use `setFrameOrigin` (moves the buttons but not their hover tracking) or
    a titlebar accessory (measured to be a no-op here).
 
-4. **The formula preview is an in-window subview**, repositioned from `layout()` so it
+5. **The formula preview is an in-window subview**, repositioned from `layout()` so it
    tracks the formula on resize. A separate floating child window was tried and
    reverted (it lost the liquid-glass look and drifted).
 
-5. **Never change `CFBundleIdentifier`** (`com.jot.Jot`). It changes which
+6. **Never change `CFBundleIdentifier`** (`com.jot.Jot`). It changes which
    `UserDefaults` plist macOS reads, which silently wipes the user's settings.
 
-6. **Font limitation:** the bundled math font has no Cyrillic. Cyrillic inside math
+7. **Font limitation:** the bundled math font has no Cyrillic. Cyrillic inside math
    must use `$$\text{…}$$` (text mode has a Unicode fallback path).
+
+8. **Window collection behaviour must stay `.managed`.** The window is a normal
+   document window (`[.managed, .fullScreenPrimary]`). It was once created with
+   `[.fullScreenAuxiliary, .moveToActiveSpace]` — those are mutually exclusive with
+   `.managed`, which left the window outside normal Spaces/Mission Control handling
+   (the Dock icon could not switch Spaces to it).
+
+9. **Appearance values with no UI are constants**, in `PanelSettings.Fixed` — not
+   stored settings that get overwritten at launch. Only what the user can change is
+   persisted, and each default literal exists once (the property default doubles as
+   the load fallback).
 
 ## Conventions
 

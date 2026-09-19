@@ -736,7 +736,7 @@ extension GlassEditorView: MathEditingHost {
         mathEditRange = MathSyntax.activeSpan(in: storage.string as NSString, caret: editorTextView.selectedRange().location)
         applyMathHighlight()
         updateMathPreview()
-        syncTextLayersAndLayout()
+        syncEditorLayout()
         return true
     }
 
@@ -768,7 +768,7 @@ extension GlassEditorView: MathEditingHost {
         mathEditRange = MathSyntax.activeSpan(in: storage.string as NSString, caret: editorTextView.selectedRange().location)
         applyMathHighlight()
         updateMathPreview()
-        syncTextLayersAndLayout()
+        syncEditorLayout()
         return true
     }
 
@@ -787,7 +787,7 @@ extension GlassEditorView: MathEditingHost {
         clearMathHighlight()
         editorTextView.setSelectedRange(NSRange(location: r.location, length: 0))
         isProcessingMath = false
-        syncTextLayersAndLayout()
+        syncEditorLayout()
         return true
     }
 
@@ -851,7 +851,7 @@ extension GlassEditorView: MathEditingHost {
             hideMathPreview()
             clearMathHighlight()
         }
-        syncTextLayersAndLayout()
+        syncEditorLayout()
     }
 
     /// The only automatic edit: after a just-typed opening "$$", insert the closing
@@ -1033,7 +1033,4 @@ extension GlassEditorView: MathEditingHost {
         backdropTextView.needsDisplay = true
     }
 
-    private func syncTextLayersAndLayout() {
-        syncEditorLayout()
-    }
 }
