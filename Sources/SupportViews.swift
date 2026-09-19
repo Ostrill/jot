@@ -88,6 +88,50 @@ final class WrapGuideView: NSView {
     }
 }
 
+/// Layout manager for the backdrop text layer: draws every glyph in one colour with
+/// the legibility halo, ignoring whatever colours the storage carries.
+///
+/// This is what lets the two text layers **share a single NSTextStorage**: the backdrop
+/// needs no attributes of its own, so there is nothing to copy on each keystroke and the
+/// layers can never drift out of alignment. The halo is set on the context here (rather
+/// than as a `.shadow` attribute) so it applies to glyphs only — formula attachments keep
+/// the halo baked into their bitmap, exactly as before.
+final class BackdropLayoutManager: NSLayoutManager {
+    var glyphColor: NSColor = .white {
+        didSet { if glyphColor != oldValue { invalidateDisplay(forCharacterRange: fullRange) } }
+    }
+    var glyphShadow: NSShadow?
+
+    private var fullRange: NSRange {
+        NSRange(location: 0, length: textStorage?.length ?? 0)
+    }
+
+    override func showCGGlyphs(
+        _ glyphs: UnsafePointer<CGGlyph>,
+        positions: UnsafePointer<CGPoint>,
+        count glyphCount: Int,
+        font: NSFont,
+        textMatrix: CGAffineTransform,
+        attributes: [NSAttributedString.Key: Any],
+        in graphicsContext: CGContext
+    ) {
+        graphicsContext.saveGState()
+        if let shadow = glyphShadow, let shadowColor = shadow.shadowColor {
+            graphicsContext.setShadow(
+                offset: shadow.shadowOffset,
+                blur: shadow.shadowBlurRadius,
+                color: shadowColor.cgColor
+            )
+        }
+        graphicsContext.setFillColor(glyphColor.cgColor)
+        super.showCGGlyphs(
+            glyphs, positions: positions, count: glyphCount, font: font,
+            textMatrix: textMatrix, attributes: attributes, in: graphicsContext
+        )
+        graphicsContext.restoreGState()
+    }
+}
+
 final class HitTestShieldView: NSView {
     override var isOpaque: Bool { false }
     override var mouseDownCanMoveWindow: Bool { true }

@@ -45,7 +45,8 @@ final class GlassEditorView: NSView {
     private let editorScrollView = NSScrollView(frame: .zero)
     private let editorContentView = FlippedContentView(frame: .zero)
     private let wrapGuideView = WrapGuideView(frame: .zero)
-    private let backdropTextView = NSTextView(frame: .zero)
+    private let backdropLayoutManager = BackdropLayoutManager()
+    private var backdropTextView = NSTextView(frame: .zero)
     private var editorTextView = EditorTextView(frame: .zero)
     private let fileStatusStack = NSStackView()
     private let fileIndicatorField = NSTextField(labelWithString: "")
@@ -250,6 +251,18 @@ final class GlassEditorView: NSView {
         editorTextView = makeEditorTextView()
         editorTextView.string = ""
 
+        // The backdrop shares the editor's text storage — one storage, two layout
+        // managers — so it mirrors every edit for free. (It used to be a second,
+        // independent text view whose whole content was copied over on every
+        // keystroke, which meant a full relayout of the document per character.)
+        // It carries no attributes of its own: BackdropLayoutManager forces the
+        // colour and halo at draw time.
+        let backdropContainer = NSTextContainer(size: NSSize(width: 0.0, height: .greatestFiniteMagnitude))
+        backdropContainer.widthTracksTextView = true
+        backdropLayoutManager.addTextContainer(backdropContainer)
+        editorTextView.textStorage?.addLayoutManager(backdropLayoutManager)
+
+        backdropTextView = NSTextView(frame: .zero, textContainer: backdropContainer)
         backdropTextView.minSize = editorTextView.minSize
         backdropTextView.maxSize = editorTextView.maxSize
         backdropTextView.isVerticallyResizable = true
@@ -262,7 +275,6 @@ final class GlassEditorView: NSView {
         backdropTextView.importsGraphics = false
         backdropTextView.isEditable = false
         backdropTextView.isSelectable = false
-        backdropTextView.string = ""
 
         editorContentView.wantsLayer = true
         editorContentView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -365,9 +377,9 @@ final class GlassEditorView: NSView {
 
     func applyAnimatedColorUpdate(_ updatedSettings: PanelSettings, refreshEditorTint: Bool) {
         colorLayer.backgroundColor = updatedSettings.accentColor.cgColor
-        applyBackdropTextColor(using: updatedSettings)
-        // Formulas are bitmaps, so they can't ride backdropTextView.textColor like
-        // the glyph text — retint them (throttled via refreshEditorTint) so they
+        backdropLayoutManager.glyphColor = updatedSettings.backdropTextColor
+        // Formulas are bitmaps, so they can't ride the backdrop's glyph colour like
+        // the text — retint them (throttled via refreshEditorTint) so they
         // cycle hue with Rainbow too. Cheap: cached-image recolor, no re-render.
         currentFormulaTint = updatedSettings.editorCompositeTextColor
         if refreshEditorTint {
@@ -409,7 +421,6 @@ final class GlassEditorView: NSView {
         mathEditRange = nil
         pendingAutoCloseAt = nil
         hideMathPreview()
-        syncBackdrop()
         syncEditorLayout()
     }
 
@@ -506,8 +517,6 @@ final class GlassEditorView: NSView {
             .font: font,
             .foregroundColor: appearanceSettings.editorTextColor
         ]
-        backdropTextView.font = font
-        backdropTextView.textColor = appearanceSettings.backdropTextColor
         wrapGuideView.guideColor = appearanceSettings.editorCompositeTextColor.withAlphaComponent(
             max(0.0, min(1.0, appearanceSettings.wrapGuideOpacity))
         )
@@ -533,8 +542,7 @@ final class GlassEditorView: NSView {
         }
         currentFormulaTint = appearanceSettings.editorCompositeTextColor
         recolorFormulas(to: currentFormulaTint)
-        syncBackdrop()
-        applyBackdropTextColor(using: appearanceSettings)
+        applyBackdropAppearance(using: appearanceSettings)
         syncEditorLayout()
     }
 
@@ -565,9 +573,15 @@ final class GlassEditorView: NSView {
         }
     }
 
-    private func applyBackdropTextColor(using appearanceSettings: PanelSettings) {
-        backdropTextView.font = NSFont.monospacedSystemFont(ofSize: appearanceSettings.editorFontSize, weight: .regular)
-        backdropTextView.textColor = appearanceSettings.backdropTextColor
+    /// The backdrop layer carries no attributes of its own — it shares the editor's
+    /// storage and gets its colour and legibility halo forced at draw time. The halo
+    /// lives ONLY here, never on the translucent editor glyphs on top: a shadow drawn
+    /// under a translucent glyph shows through and dims it, whereas the ~0.94-opaque
+    /// backdrop glyph covers it, leaving only the halo *around* the text.
+    private func applyBackdropAppearance(using appearanceSettings: PanelSettings) {
+        backdropLayoutManager.glyphShadow = appearanceSettings.editorTextShadow
+        backdropLayoutManager.glyphColor = appearanceSettings.backdropTextColor
+        backdropTextView.needsDisplay = true
     }
 
     private func syncEditorLayout() {
@@ -690,7 +704,6 @@ final class GlassEditorView: NSView {
 
 extension GlassEditorView: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
-        syncBackdrop()
         syncEditorLayout()
         scheduleReconcile()
         onTextDidChange?()
@@ -1019,73 +1032,37 @@ extension GlassEditorView: MathEditingHost {
         mathPreview.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
     }
 
-    /// Mirrors the editor's content (including formula attachments, for exact
-    /// alignment) into the colored backdrop layer, recolored and without the
-    /// editing highlight.
-    private func syncBackdrop() {
-        guard let editorStorage = editorTextView.textStorage,
-              let backStorage = backdropTextView.textStorage else { return }
-        let copy = NSMutableAttributedString(attributedString: editorStorage)
-        let full = NSRange(location: 0, length: copy.length)
-        // Use the color the backdrop is *currently* showing, not settings.backdropTextColor:
-        // during Rainbow the timer animates backdropTextView.textColor every frame but does
-        // NOT update editorView.settings (that path is avoided to keep the blink timer alive,
-        // see §7). Baking the stale settings color here made the backdrop flash to a frozen
-        // hue for one frame on every keystroke — the returned text-color flicker.
-        let backdropColor = backdropTextView.textColor ?? settings.backdropTextColor
-        // The halo lives ONLY on this near-opaque backdrop layer, never on the
-        // translucent editor glyphs on top: a shadow drawn under a translucent glyph
-        // shows through and dims it. Here the ~0.94-opaque backdrop glyph covers the
-        // dark shadow under the letter, so only the halo *around* the text remains.
-        copy.addAttributes([.font: editorFont, .foregroundColor: backdropColor, .shadow: settings.editorTextShadow], range: full)
-        backStorage.setAttributedString(copy)
-    }
-
     /// Re-tints every rendered formula to `color` (cheap bitmap retint, no LaTeX
-    /// re-layout) so formulas cycle hue with Rainbow alongside the text. Updates
-    /// both the editor and its backdrop copies, then redraws.
+    /// re-layout) so formulas cycle hue with Rainbow alongside the text. Both layers
+    /// draw the same attachment objects, so one pass updates them both.
     private func recolorFormulas(to color: NSColor) {
-        guard let editorStorage = editorTextView.textStorage else { return }
+        guard let storage = editorTextView.textStorage else { return }
         let shadow = settings.editorTextShadow
-        let full = NSRange(location: 0, length: editorStorage.length)
-        var tinted: [(NSRange, NSImage)] = []
+        let full = NSRange(location: 0, length: storage.length)
+        var didTint = false
         var sizeChanged = false
-        editorStorage.enumerateAttribute(.attachment, in: full, options: []) { value, range, _ in
+        storage.enumerateAttribute(.attachment, in: full, options: []) { value, _, _ in
             guard let att = value as? MathAttachment else { return }
             let before = att.image?.size
             att.applyTint(color, shadow: shadow)
             if att.image?.size != before { sizeChanged = true }
-            if let img = att.image { tinted.append((range, img)) }
+            didTint = true
         }
-        guard !tinted.isEmpty else { return }
-        // The backdrop layer holds attachment copies at the same ranges; point them
-        // at the freshly tinted images so both layers stay in sync (this path does
-        // not call syncBackdrop, to avoid a full backdrop rebuild every tick).
-        if let backStorage = backdropTextView.textStorage {
-            for (range, img) in tinted where NSMaxRange(range) <= backStorage.length {
-                (backStorage.attribute(.attachment, at: range.location, effectiveRange: nil) as? NSTextAttachment)?.image = img
-            }
-        }
-        // Baking the halo changes the attachment image size; the layout manager caches
+        guard didTint else { return }
+        // Baking the halo changes the attachment image size; the layout managers cache
         // glyph metrics, so a size change needs an explicit relayout. Skipped when only
         // the tint changed (e.g. every Rainbow frame) so that path stays cheap.
         if sizeChanged {
-            relayoutAttachments(in: editorTextView)
-            relayoutAttachments(in: backdropTextView)
+            for manager in storage.layoutManagers {
+                manager.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
+                if let container = manager.textContainers.first { manager.ensureLayout(for: container) }
+            }
         }
         editorTextView.needsDisplay = true
         backdropTextView.needsDisplay = true
     }
 
-    private func relayoutAttachments(in textView: NSTextView) {
-        guard let lm = textView.layoutManager, let tc = textView.textContainer,
-              let length = textView.textStorage?.length else { return }
-        lm.invalidateLayout(forCharacterRange: NSRange(location: 0, length: length), actualCharacterRange: nil)
-        lm.ensureLayout(for: tc)
-    }
-
     private func syncTextLayersAndLayout() {
-        syncBackdrop()
         syncEditorLayout()
     }
 }
