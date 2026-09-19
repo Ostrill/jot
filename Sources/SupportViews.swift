@@ -108,14 +108,9 @@ final class WrapGuideView: NSView {
 /// than as a `.shadow` attribute) so it applies to glyphs only — formula attachments keep
 /// the halo baked into their bitmap, exactly as before.
 final class BackdropLayoutManager: NSLayoutManager {
-    var glyphColor: NSColor = .white {
-        didSet { if glyphColor != oldValue { invalidateDisplay(forCharacterRange: fullRange) } }
-    }
+    // Both are pure draw-time state — the caller marks the backdrop view for redraw.
+    var glyphColor: NSColor = .white
     var glyphShadow: NSShadow?
-
-    private var fullRange: NSRange {
-        NSRange(location: 0, length: textStorage?.length ?? 0)
-    }
 
     override func showCGGlyphs(
         _ glyphs: UnsafePointer<CGGlyph>,

@@ -379,6 +379,7 @@ final class GlassEditorView: NSView {
     func applyAnimatedColorUpdate(_ updatedSettings: PanelSettings, refreshEditorTint: Bool) {
         colorLayer.backgroundColor = updatedSettings.accentColor.cgColor
         backdropLayoutManager.glyphColor = updatedSettings.backdropTextColor
+        backdropTextView.needsDisplay = true
         // Formulas are bitmaps, so they can't ride the backdrop's glyph colour like
         // the text — retint them (throttled via refreshEditorTint) so they
         // cycle hue with Rainbow too. Cheap: cached-image recolor, no re-render.

@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings = PanelSettings(defaults: .standard)
     private var rainbowTimer: Timer?
     private var lastAnimatedTextHue: CGFloat = 0.0
+    private var isAppearanceMenuOpen = false
 
     private var alwaysOnTopItem: NSMenuItem!
     private var rainbowItem: NSMenuItem!
@@ -21,13 +22,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var sliderViews: [String: SliderMenuItemView] = [:]
 
-    /// Every open document window's editor, for broadcasting appearance + Rainbow.
+    /// Open document windows, held weakly so closed ones drop out on their own. Cheaper
+    /// than rescanning NSApp.windows, which the Rainbow timer used to do 30×/second.
+    private let openControllers = NSHashTable<JotWindowController>.weakObjects()
+
+    /// Every open document window's editor, for broadcasting appearance changes.
     private var allEditorViews: [GlassEditorView] {
-        NSApp.windows.compactMap { ($0.windowController as? JotWindowController)?.editorView }
+        openControllers.allObjects.map(\.editorView)
+    }
+
+    /// Only the editors the user can actually see. Rainbow repaints nothing for a
+    /// window that is minimised, hidden or fully covered by another window.
+    private var visibleEditorViews: [GlassEditorView] {
+        openControllers.allObjects.compactMap { controller in
+            guard let window = controller.window,
+                  window.isVisible, !window.isMiniaturized,
+                  window.occlusionState.contains(.visible) else { return nil }
+            return controller.editorView
+        }
     }
 
     /// Applies the current app-wide appearance to a freshly opened window.
     func register(_ controller: JotWindowController) {
+        openControllers.add(controller)
         controller.editorView.settings = settings
         controller.window?.level = settings.alwaysOnTop ? .floating : .normal
     }
@@ -110,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appearanceItem)
         appearanceItem.submenu = appearanceMenu
 
+        appearanceMenu.delegate = self
         setupFormatMenu()
         setupAppearanceMenu()
         finalizeMenuLayout(formatMenu)
@@ -326,8 +344,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.save(to: defaults)
         lastAnimatedTextHue = settings.rainbowHue
         for view in allEditorViews { view.settings = settings }
-        for window in NSApp.windows where window.windowController is JotWindowController {
-            window.level = settings.alwaysOnTop ? .floating : .normal
+        for controller in openControllers.allObjects {
+            controller.window?.level = settings.alwaysOnTop ? .floating : .normal
         }
         updateMenuState()
         updateRainbowTimer()
@@ -362,19 +380,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         rainbowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self else { return }
+            // Nothing on screen to animate → don't burn a frame (or advance the hue):
+            // the animation simply resumes where it left off when a window comes back.
+            let editors = self.visibleEditorViews
+            guard !editors.isEmpty else { return }
+
             self.settings.rainbowHue += max(self.settings.rainbowSpeed, 0.0) / 360.0 * 6.0
             if self.settings.rainbowHue > 1.0 {
                 self.settings.rainbowHue.formTruncatingRemainder(dividingBy: 1.0)
             }
             let hueDelta = self.circularHueDistance(from: self.lastAnimatedTextHue, to: self.settings.rainbowHue)
             let shouldRefreshTextTint = hueDelta >= 0.025
-            for view in self.allEditorViews {
+            for view in editors {
                 view.applyAnimatedColorUpdate(self.settings, refreshEditorTint: shouldRefreshTextTint)
             }
             if shouldRefreshTextTint {
                 self.lastAnimatedTextHue = self.settings.rainbowHue
             }
-            self.sliderViews["rainbowHue"]?.doubleValue = self.settings.rainbowHue * 360.0
+            // Only worth pushing into the menu slider while the menu is actually open.
+            if self.isAppearanceMenuOpen {
+                self.sliderViews["rainbowHue"]?.doubleValue = self.settings.rainbowHue * 360.0
+            }
             // (Dock-icon hue-tinting removed — the app now ships a static icon.
             //  See memory note jot-dock-icon-tint for the old implementation.)
         }
@@ -385,5 +411,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let delta = abs(end - start)
         return min(delta, 1.0 - delta)
     }
+}
 
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === appearanceMenu else { return }
+        isAppearanceMenuOpen = true
+        sliderViews["rainbowHue"]?.doubleValue = settings.rainbowHue * 360.0
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu === appearanceMenu { isAppearanceMenuOpen = false }
+    }
 }
