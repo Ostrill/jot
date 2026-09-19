@@ -23,29 +23,39 @@ enum MathSyntax {
         return count % 2 == 1
     }
 
-    /// Start indices of every unescaped `$$` delimiter, left→right.
-    static func delimiters(in ns: NSString) -> [Int] {
-        var result: [Int] = []
-        var i = 0
-        while i + 1 < ns.length {
-            if ns.character(at: i) == dollar, ns.character(at: i + 1) == dollar, !isEscaped(ns, i) {
-                result.append(i)
-                i += 2
-            } else {
-                i += 1
-            }
-        }
-        return result
+    private static func isEscaped(_ characters: [unichar], _ idx: Int) -> Bool {
+        var count = 0
+        var j = idx - 1
+        while j >= 0, characters[j] == backslash { count += 1; j -= 1 }
+        return count % 2 == 1
     }
 
-    /// Ranges of complete `$$…$$` spans (delimiters included). A trailing
-    /// unmatched `$$` yields no span.
+    /// Ranges of complete `$$…$$` spans (delimiters included), left→right and
+    /// non-overlapping. A trailing unmatched `$$` yields no span.
+    ///
+    /// The characters are copied into a flat buffer first and scanned there:
+    /// `NSString.character(at:)` is an Objective-C message per character, and this
+    /// parse runs on every keystroke over the whole document.
     static func completeSpans(in ns: NSString) -> [NSRange] {
-        let d = delimiters(in: ns)
+        let length = ns.length
+        guard length > 3 else { return [] }
+        var characters = [unichar](repeating: 0, count: length)
+        ns.getCharacters(&characters, range: NSRange(location: 0, length: length))
+
         var spans: [NSRange] = []
+        var openAt: Int?
         var i = 0
-        while i + 1 < d.count {
-            spans.append(NSRange(location: d[i], length: d[i + 1] + 2 - d[i]))
+        while i + 1 < length {
+            guard characters[i] == dollar, characters[i + 1] == dollar, !isEscaped(characters, i) else {
+                i += 1
+                continue
+            }
+            if let open = openAt {
+                spans.append(NSRange(location: open, length: i + 2 - open))
+                openAt = nil
+            } else {
+                openAt = i
+            }
             i += 2
         }
         return spans
@@ -58,8 +68,12 @@ enum MathSyntax {
 
     /// The complete span whose interior contains `caret` (strictly between the
     /// delimiters), i.e. the formula currently being edited — if any.
+    static func activeSpan(in spans: [NSRange], caret: Int) -> NSRange? {
+        spans.first { caret > $0.location && caret < $0.location + $0.length }
+    }
+
     static func activeSpan(in ns: NSString, caret: Int) -> NSRange? {
-        completeSpans(in: ns).first { caret > $0.location && caret < $0.location + $0.length }
+        activeSpan(in: completeSpans(in: ns), caret: caret)
     }
 }
 

@@ -62,6 +62,7 @@ final class GlassEditorView: NSView {
     private var isReconciling = false          // re-entrancy guard around reconcileMath()
     private var reconcilePending = false       // a reconcile is queued for the next runloop tick
     private var pendingAutoCloseAt: Int?       // caret pos where "$$" should auto-close
+    private var highlightedMathRange: NSRange? // the span currently greyed, so it can be un-greyed cheaply
 
     private var editorFont: NSFont {
         NSFont.monospacedSystemFont(ofSize: settings.editorFontSize, weight: .regular)
@@ -419,6 +420,7 @@ final class GlassEditorView: NSView {
         let attributed = attributedStringRenderingFormulas(from: text)
         editorTextView.textStorage?.setAttributedString(attributed)
         mathEditRange = nil
+        highlightedMathRange = nil
         pendingAutoCloseAt = nil
         hideMathPreview()
         syncEditorLayout()
@@ -539,6 +541,8 @@ final class GlassEditorView: NSView {
             storage.beginEditing()
             storage.addAttributes([.font: font, .foregroundColor: appearanceSettings.editorTextColor], range: range)
             storage.endEditing()
+            highlightedMathRange = nil          // the full-range repaint above wiped it
+            applyMathHighlight()
         }
         currentFormulaTint = appearanceSettings.editorCompositeTextColor
         recolorFormulas(to: currentFormulaTint)
@@ -888,16 +892,26 @@ extension GlassEditorView: MathEditingHost {
 
         // Render every complete span the caret is NOT inside (right→left keeps the
         // earlier spans' indices valid; the caret is remapped across each render).
+        // One parse serves the whole pass — it walks the entire document, so doing it
+        // three times per keystroke (as this used to) is the single most expensive
+        // thing here after layout.
         var caret = editorTextView.selectedRange().location
         let spans = MathSyntax.completeSpans(in: storage.string as NSString)
-        let active = MathSyntax.activeSpan(in: storage.string as NSString, caret: caret)
+        let active = MathSyntax.activeSpan(in: spans, caret: caret)
+        var didRender = false
         for span in spans.reversed() where !(active.map { NSEqualRanges($0, span) } ?? false) {
-            caret = renderSpan(span, caret: caret)
+            guard let remapped = renderSpan(span, caret: caret) else { continue }
+            caret = remapped
+            didRender = true
         }
         editorTextView.setSelectedRange(NSRange(location: max(0, min(caret, storage.length)), length: 0))
 
-        // Refresh the editing state/preview for wherever the caret ended up.
-        mathEditRange = MathSyntax.activeSpan(in: storage.string as NSString, caret: editorTextView.selectedRange().location)
+        // Refresh the editing state/preview for wherever the caret ended up. Re-parsing
+        // is only needed when a span was actually replaced by an image above.
+        let finalCaret = editorTextView.selectedRange().location
+        mathEditRange = didRender
+            ? MathSyntax.activeSpan(in: storage.string as NSString, caret: finalCaret)
+            : MathSyntax.activeSpan(in: spans, caret: finalCaret)
         if mathEditRange != nil {
             applyMathHighlight()
             updateMathPreview()
@@ -925,10 +939,11 @@ extension GlassEditorView: MathEditingHost {
     }
 
     /// Replaces one complete raw span with its rendered image (empty → removed,
-    /// invalid → left untouched). Returns the caret remapped across the change.
-    private func renderSpan(_ span: NSRange, caret: Int) -> Int {
+    /// invalid → left untouched). Returns the caret remapped across the change, or nil
+    /// if the storage was left untouched.
+    private func renderSpan(_ span: NSRange, caret: Int) -> Int? {
         guard let storage = editorTextView.textStorage,
-              span.location + span.length <= storage.length else { return caret }
+              span.location + span.length <= storage.length else { return nil }
         // Store the EXACT content between the delimiters (no trimming) so the source
         // round-trips byte-for-byte — the app must never silently edit the text.
         let raw = MathSyntax.latex(of: span, in: storage.string as NSString)
@@ -941,7 +956,7 @@ extension GlassEditorView: MathEditingHost {
                 attachment: MathAttachment(latex: raw, baseImage: base, font: editorFont, tint: currentFormulaTint, shadow: settings.editorTextShadow)))
             newLength = 1
         } else {
-            return caret   // invalid LaTeX → leave the raw source in place
+            return nil   // invalid LaTeX → leave the raw source in place
         }
         return remapCaret(caret, across: span, newLength: newLength)
     }
@@ -1000,19 +1015,35 @@ extension GlassEditorView: MathEditingHost {
 
     /// Greys the editable "$$…$$" source so it stands out from the surrounding
     /// (white-with-accent) text — no background plate, the opaque grey is enough.
-    private func applyMathHighlight() {
+    ///
+    /// Only the ranges whose colour actually changes are touched. Rewriting the
+    /// attribute across the whole document (what this used to do, on every keystroke)
+    /// invalidates the layout of the whole document along with it.
+    private static let mathSourceColor = NSColor(calibratedWhite: 0.72, alpha: 1.0)
+
+    private func applyMathHighlight() { setMathHighlight(to: mathEditRange) }
+
+    private func clearMathHighlight() { setMathHighlight(to: nil) }
+
+    private func setMathHighlight(to range: NSRange?) {
         guard let storage = editorTextView.textStorage else { return }
-        let full = NSRange(location: 0, length: storage.length)
-        storage.addAttribute(.foregroundColor, value: settings.editorTextColor, range: full)
-        if let r = mathEditRange, r.location + r.length <= storage.length {
-            storage.addAttribute(.foregroundColor, value: NSColor(calibratedWhite: 0.72, alpha: 1.0), range: r)
+        let length = storage.length
+        let target = range.flatMap { clamp($0, to: length) }
+        if let previous = highlightedMathRange.flatMap({ clamp($0, to: length) }) {
+            storage.addAttribute(.foregroundColor, value: settings.editorTextColor, range: previous)
         }
+        if let target {
+            storage.addAttribute(.foregroundColor, value: Self.mathSourceColor, range: target)
+        }
+        highlightedMathRange = target
     }
 
-    private func clearMathHighlight() {
-        guard let storage = editorTextView.textStorage else { return }
-        let full = NSRange(location: 0, length: storage.length)
-        storage.addAttribute(.foregroundColor, value: settings.editorTextColor, range: full)
+    /// The part of `range` that still exists in a storage of `length` characters — the
+    /// remembered highlight can be stale after the text around it was edited.
+    private func clamp(_ range: NSRange, to length: Int) -> NSRange? {
+        let location = min(range.location, length)
+        let clampedLength = min(range.length, length - location)
+        return clampedLength > 0 ? NSRange(location: location, length: clampedLength) : nil
     }
 
     private func positionMathPreview(belowFormulaRange r: NSRange, size: NSSize) {
