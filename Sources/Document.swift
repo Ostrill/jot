@@ -71,7 +71,13 @@ final class JotWindowController: NSWindowController {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        // A normal document window: it participates in Spaces / Mission Control (.managed)
+        // and can go full screen. The previous [.fullScreenAuxiliary, .moveToActiveSpace]
+        // was left over from the app's floating-panel days and made the window *unmanaged*
+        // (.managed, .moveToActiveSpace and .canJoinAllSpaces are mutually exclusive), so
+        // the Dock icon wouldn't switch Spaces to it and Mission Control treated it as an
+        // auxiliary panel.
+        window.collectionBehavior = [.managed, .fullScreenPrimary]
         window.minSize = NSSize(width: 360.0, height: 240.0)
         // A transparent, empty unified toolbar raises the titlebar height so AppKit
         // itself lays the traffic lights out lower and inset — clear of our big rounded

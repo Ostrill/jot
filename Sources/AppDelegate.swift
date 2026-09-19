@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         normalizeFixedSettings()
         setupMainMenu()
         applySettings()
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         clearCustomFinderIcon()
         // No window is created here: this is a document-based app, so NSDocumentController
         // opens an untitled document (and its window) on launch, and handles opening files.
@@ -53,6 +53,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// Clicking the Dock icon brings an already-open window back: un-minimise it and order
+    /// it front, which also switches Spaces to the one holding it. Without this, AppKit's
+    /// default could open a *new* untitled document instead of surfacing the existing one.
+    /// Returning false means "handled, don't run the default".
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let documentWindows = NSApp.windows.filter { $0.windowController is JotWindowController }
+        guard !documentWindows.isEmpty else { return true }   // nothing open → default: new untitled document
+        let target = documentWindows.first { $0.isVisible && !$0.isMiniaturized } ?? documentWindows[0]
+        if target.isMiniaturized { target.deminiaturize(nil) }
+        target.makeKeyAndOrderFront(nil)
+        return false
     }
 
     @objc private func toggleAlwaysOnTop(_ sender: Any?) {
