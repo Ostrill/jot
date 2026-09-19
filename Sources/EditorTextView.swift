@@ -7,7 +7,6 @@ import AppKit
 
 /// Implemented by GlassEditorView to drive inline LaTeX editing from key events.
 protocol MathEditingHost: AnyObject {
-    var isEditingMath: Bool { get }
     func mathExitRight() -> Bool               // →  at latex end steps out past the closing "$$"
     func mathExitLeft() -> Bool                // ←  at latex start steps out before the opening "$$"
     func mathEnterAttachment(fromLeft: Bool) -> Bool   // →/← into a rendered formula opens it
@@ -17,48 +16,6 @@ protocol MathEditingHost: AnyObject {
 
 final class EditorTextView: NSTextView {
     weak var mathHost: MathEditingHost?
-
-    private enum KeyCode {
-        static let a: UInt16 = 0
-        static let z: UInt16 = 6
-        static let x: UInt16 = 7
-        static let c: UInt16 = 8
-        static let v: UInt16 = 9
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let keyCode = event.keyCode
-
-        if modifiers == [.command] {
-            switch keyCode {
-            case KeyCode.a:
-                selectAll(nil)
-                return true
-            case KeyCode.z:
-                undoManager?.undo()
-                return true
-            case KeyCode.x:
-                cut(nil)
-                return true
-            case KeyCode.c:
-                copy(nil)
-                return true
-            case KeyCode.v:
-                paste(nil)
-                return true
-            default:
-                break
-            }
-        }
-
-        if modifiers == [.command, .shift], keyCode == KeyCode.z {
-            undoManager?.redo()
-            return true
-        }
-
-        return super.performKeyEquivalent(with: event)
-    }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()

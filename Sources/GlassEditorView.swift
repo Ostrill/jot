@@ -132,15 +132,19 @@ final class GlassEditorView: NSView {
         CATransaction.commit()
 
         editorScrollView.frame = editorRect
-        let maxStatusWidth = max(bounds.width - titleMetrics.leadingReserve - TitleBarLayout.trailingInset, 120.0)
-        let statusSize = fileStatusStack.fittingSize
-        let clampedWidth = min(statusSize.width, maxStatusWidth)
-        fileStatusStack.frame = CGRect(
-            x: bounds.width - clampedWidth - TitleBarLayout.trailingInset,
-            y: titleMetrics.statusOriginY,
-            width: clampedWidth,
-            height: statusSize.height
-        )
+        // Only when there is a document to show: laying the stack out at zero width
+        // otherwise breaks its own internal spacing constraint.
+        if !fileStatusStack.isHidden {
+            let maxStatusWidth = max(bounds.width - titleMetrics.leadingReserve - TitleBarLayout.trailingInset, 120.0)
+            let statusSize = fileStatusStack.fittingSize
+            let clampedWidth = max(min(statusSize.width, maxStatusWidth), 1.0)
+            fileStatusStack.frame = CGRect(
+                x: bounds.width - clampedWidth - TitleBarLayout.trailingInset,
+                y: titleMetrics.statusOriginY,
+                width: clampedWidth,
+                height: statusSize.height
+            )
+        }
         syncEditorLayout()
         // Keep the preview under the formula when the window is resized (not only on
         // keystrokes), so it no longer drifts relative to the window's bottom edge.
@@ -436,30 +440,11 @@ final class GlassEditorView: NSView {
         return result
     }
 
-    func rebuildEditorTextView() {
-        let previousText = editorTextView.string
-        let previousSelection = editorTextView.selectedRange()
-        editorTextView.removeFromSuperview()
-        editorTextView = makeEditorTextView()
-        editorTextView.string = previousText
-        editorTextView.setSelectedRange(previousSelection)
-        wrapGuideView.textView = editorTextView
-        editorContentView.addSubview(editorTextView)
-        applyEditorAppearance(using: settings, updateExistingText: true, updateSelection: true)
-        focusEditor()
-    }
-
     func focusEditor() {
         guard let window else { return }
         window.makeFirstResponder(editorTextView)
         editorTextView.updateInsertionPointStateAndRestartTimer(true)
         editorTextView.needsDisplay = true
-    }
-
-    func adjustFontSize(delta: CGFloat) {
-        let nextSize = min(max(settings.editorFontSize + delta, 11.0), 30.0)
-        settings.editorFontSize = nextSize
-        applyEditorAppearance(using: settings, updateExistingText: true, updateSelection: true)
     }
 
     private func applyEditorAppearance(using appearanceSettings: PanelSettings, updateExistingText: Bool, updateSelection: Bool) {
@@ -717,8 +702,6 @@ extension GlassEditorView: NSTextViewDelegate {
 // clicking an attachment (or a leftover raw span) re-opens it for editing.
 
 extension GlassEditorView: MathEditingHost {
-    var isEditingMath: Bool { mathEditRange != nil }
-
     // MARK: Key handling — each just moves the caret; reconcileMath() renders.
 
     /// → at the latex end steps out past the closing "$$" (commits the formula).

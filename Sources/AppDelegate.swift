@@ -108,6 +108,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(fileItem)
         fileItem.submenu = makeFileMenu()
 
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        mainMenu.addItem(editItem)
+        editItem.submenu = makeEditMenu()
+
         let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
         mainMenu.addItem(formatItem)
         formatItem.submenu = formatMenu
@@ -138,6 +142,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// The standard editing commands. They have no target, so they travel the responder
+    /// chain to the focused text view (and to the window's undo manager) — which is also
+    /// what makes ⌘Z/⌘X/⌘C/⌘V/⌘A work without the editor intercepting raw key codes.
+    private func makeEditMenu() -> NSMenu {
+        let menu = NSMenu(title: "Edit")
+        menu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        menu.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        menu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        menu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        return menu
+    }
+
     private func setupFormatMenu() {
         formatMenu.removeAllItems()
         formatMenu.autoenablesItems = false
@@ -154,6 +174,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.settings.editorFontSize = CGFloat(value)
             self?.applySettings()
         }
+
+        let increaseItem = NSMenuItem(title: "Increase Font Size", action: #selector(increaseFontSize(_:)), keyEquivalent: "+")
+        increaseItem.target = self
+        formatMenu.addItem(increaseItem)
+        let decreaseItem = NSMenuItem(title: "Decrease Font Size", action: #selector(decreaseFontSize(_:)), keyEquivalent: "-")
+        decreaseItem.target = self
+        formatMenu.addItem(decreaseItem)
 
         formatMenu.addItem(.separator())
         wordWrapItem = NSMenuItem(title: "Word Wrap", action: #selector(toggleWordWrap(_:)), keyEquivalent: "")
@@ -289,6 +316,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.view = view
         menu.addItem(item)
         sliderViews[key] = view
+    }
+
+    @objc private func increaseFontSize(_ sender: Any?) { adjustFontSize(by: 1.0) }
+
+    @objc private func decreaseFontSize(_ sender: Any?) { adjustFontSize(by: -1.0) }
+
+    private func adjustFontSize(by delta: CGFloat) {
+        settings.editorFontSize = min(max(settings.editorFontSize + delta, 11.0), 30.0)
+        applySettings()
     }
 
     @objc private func toggleWordWrap(_ sender: Any?) {

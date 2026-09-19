@@ -222,8 +222,11 @@ final class MathPreviewView: NSView {
         glass.frame = bounds
         contentContainer.frame = bounds
         // Generous inset keeps the formula away from the glass edge, where the
-        // refraction would otherwise smear its strokes.
-        imageView.frame = bounds.insetBy(dx: padding, dy: padding)
+        // refraction would otherwise smear its strokes. Guard the degenerate case:
+        // insetting a rect smaller than the inset yields CGRectNull, whose infinite
+        // origin AppKit rejects ("Invalid view geometry: x is infinity").
+        let inset = bounds.insetBy(dx: padding, dy: padding)
+        imageView.frame = inset.isNull ? .zero : inset
     }
 
     /// Stores the white base render and shows it tinted. Keeping the base lets the
