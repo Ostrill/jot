@@ -131,7 +131,21 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
    `.managed`, which left the window outside normal Spaces/Mission Control handling
    (the Dock icon could not switch Spaces to it).
 
-9. **Appearance values with no UI are constants**, in `PanelSettings.Fixed` — not
+9. **The window is rendered twice by the system, and the second way is unforgiving.**
+   Besides the live composite, macOS re-renders the window from a *static snapshot*
+   (Mission Control's desktop thumbnails, the window switcher, screenshots, the
+   minimise animation). In that path `NSGlassEffectView` collapses to a flat plate and
+   **its `contentView` is not drawn at all** — which is why the app's content is a
+   sibling on top of the glass, not inside it. Decorative overlays are risky there too:
+   a sheen gradient at 0.01 opacity came out at full strength (diagonal stripes across
+   the window) and a 0.05-alpha border layer flickered along the corners during the
+   transition; both were deleted. What remains — the window looking dark in the
+   thumbnail strip — is **not** fixable from the app: window alpha, glass style, dim
+   opacity and hiding the glass view on resign-key were all measured to have no effect
+   (the notification does arrive ~180 ms before the redraw), so the system is drawing
+   from a snapshot cached while the window was still active. Don't re-litigate this.
+
+10. **Appearance values with no UI are constants**, in `PanelSettings.Fixed` — not
    stored settings that get overwritten at launch. Only what the user can change is
    persisted, and each default literal exists once (the property default doubles as
    the load fallback).
