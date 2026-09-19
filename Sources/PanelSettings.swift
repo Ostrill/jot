@@ -5,118 +5,58 @@
 
 import AppKit
 
+/// The app-wide appearance, shared by every open window and persisted under
+/// `Jot.settings`. Only the values the user can actually change live here; everything
+/// that was calibrated once and pinned at launch is a constant in `Fixed` below.
+///
+/// **Never change `CFBundleIdentifier`** — it swaps the preferences file and wipes
+/// these settings.
 struct PanelSettings {
-    enum DocumentIndicatorStyle: Int, CaseIterable {
-        case dot
-        case star
-        case square
-        case diamond
-        case plus
-
-        var title: String {
-            switch self {
-            case .dot: return "Dot"
-            case .star: return "Star"
-            case .square: return "Square"
-            case .diamond: return "Diamond"
-            case .plus: return "Plus"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .dot: return "\u{2022}"
-            case .star: return "\u{2736}"
-            case .square: return "\u{25AA}"
-            case .diamond: return "\u{25C6}"
-            case .plus: return "+"
-            }
-        }
+    /// Appearance values that used to be adjustable, calibrated once and then pinned at
+    /// every launch. Keeping them as constants means there is no second, contradictory
+    /// copy in UserDefaults to reason about.
+    enum Fixed {
+        static let glassStyle: NSGlassEffectView.Style = .clear
+        static let cornerRadius: CGFloat = 30.0
+        static let borderOpacity: CGFloat = 0.05
+        static let sheenOpacity: CGFloat = 0.01
+        static let menuSliderOffset: CGFloat = 25.0
+        /// Shown next to the filename while the document has unsaved changes.
+        static let documentIndicatorSymbol = "\u{2736}"          // ✶
+        static let wrapGuideXOffset: CGFloat = -10.37291937635512
+        static let wrapGuideThickness: CGFloat = 3.197090105162524
+        static let wrapGuideTopTrim: CGFloat = 8.003953657818043
+        static let wrapGuideBottomTrim: CGFloat = 2.254072375033705
+        static let wrapGuideOpacity: CGFloat = 0.3048133243984811
+        static let wrapGuideRounded = true
     }
 
-    enum GlassStyle: Int {
-        case clear
-        case regular
-
-        var appKitStyle: NSGlassEffectView.Style {
-            switch self {
-            case .clear: return .clear
-            case .regular: return .regular
-            }
-        }
-    }
-
-    var glassStyle: GlassStyle = .clear
-    var cornerRadius: CGFloat = 30.0
-    var tintStrength: CGFloat = 0.0
-    var warmth: CGFloat = 0.0
-    var fillOpacity: CGFloat = 0.0
-    var borderOpacity: CGFloat = 0.05
-    var sheenOpacity: CGFloat = 0.01
-    var shadowOpacity: CGFloat = 0.0
-    var shadowBlur: CGFloat = 0.0
-    // The appearance defaults below are the maintainer's calibrated setup, baked in
-    // so a fresh install opens looking the same as the reference configuration
-    // (rather than the bare AppKit defaults). Kept in sync with the `load` fallbacks.
+    // The defaults below are the maintainer's calibrated setup, baked in so a fresh
+    // install opens looking like the reference configuration. They are also the
+    // fallbacks when a key is missing from the stored settings — see `init(defaults:)`.
     var darkeningOpacity: CGFloat = 0.5952995867768595
     var colorStrength: CGFloat = 0.1984762396694215
     var rainbowHue: CGFloat = 0.4089982857132796
-    var rainbowEnabled: Bool = true
+    var rainbowEnabled = true
     var rainbowSpeed: CGFloat = 0.05283514616487946
-    var alwaysOnTop: Bool = false
+    var alwaysOnTop = false
     var editorFontSize: CGFloat = 19.61813446969697
     var textColorStrength: CGFloat = 0.5045408105713924
-    var textShadowStrength: CGFloat = 0.1968333431523143   // dark halo behind the text for legibility over any backdrop (0 = off)
-    var blurStrength: CGFloat = 0.0
-    var menuSliderOffset: CGFloat = 25.0
-    var wordWrap: Bool = true
-    var showWrapGuides: Bool = true
-    var renderInlineFormulas: Bool = true   // render $$…$$ as images (off → plain source text)
-    var wrapGuideXOffset: CGFloat = 0.0
-    var wrapGuideThickness: CGFloat = 1.5
-    var wrapGuideTopTrim: CGFloat = 1.0
-    var wrapGuideBottomTrim: CGFloat = 1.0
-    var wrapGuideOpacity: CGFloat = 0.18
-    var wrapGuideRounded: Bool = false
-    var documentIndicatorStyle: DocumentIndicatorStyle = .dot
+    /// Dark halo behind the text, so it stays legible over any backdrop (0 = off).
+    var textShadowStrength: CGFloat = 0.1968333431523143
+    var wordWrap = true
+    var showWrapGuides = true
+    /// Render `$$…$$` as images; off → plain source text.
+    var renderInlineFormulas = true
 
-    var tintColor: NSColor? {
-        guard tintStrength > 0.001 else { return nil }
-
-        let warm = NSColor(calibratedRed: 1.0, green: 0.95, blue: 0.86, alpha: 1.0)
-        let cool = NSColor(calibratedRed: 0.84, green: 0.93, blue: 1.0, alpha: 1.0)
-        let neutral = NSColor(calibratedWhite: 0.98, alpha: 1.0)
-
-        let mix = max(-1.0, min(1.0, warmth))
-        let baseColor: NSColor
-
-        if mix > 0.001 {
-            baseColor = neutral.blended(withFraction: mix, of: warm) ?? warm
-        } else if mix < -0.001 {
-            baseColor = neutral.blended(withFraction: abs(mix), of: cool) ?? cool
-        } else {
-            baseColor = neutral
-        }
-
-        return baseColor.withAlphaComponent(tintStrength)
-    }
-
-    var fillColor: NSColor {
-        let alpha = max(0.0, min(1.0, fillOpacity))
-
-        if let tintColor {
-            return tintColor.withAlphaComponent(alpha)
-        }
-
-        return NSColor(calibratedWhite: 1.0, alpha: alpha)
-    }
+    // MARK: Derived colors
 
     var accentColor: NSColor {
         NSColor(
-            calibratedHue: max(0.0, min(1.0, rainbowHue)),
+            calibratedHue: clamped(rainbowHue),
             saturation: 0.78,
             brightness: 1.0,
-            alpha: max(0.0, min(1.0, colorStrength))
+            alpha: clamped(colorStrength)
         )
     }
 
@@ -125,28 +65,23 @@ struct PanelSettings {
     }
 
     var editorTextColor: NSColor {
-        let alpha = 0.56 + (max(0.0, min(1.0, textColorStrength)) * 0.28)
-        return NSColor(calibratedWhite: 1.0, alpha: alpha)
+        NSColor(calibratedWhite: 1.0, alpha: textAlpha)
     }
 
     var editorCompositeTextColor: NSColor {
-        let alpha = 0.56 + (max(0.0, min(1.0, textColorStrength)) * 0.28)
-        return accentReferenceColor.blended(withFraction: alpha, of: .white) ?? .white
+        accentReferenceColor.blended(withFraction: textAlpha, of: .white) ?? .white
     }
 
     var backdropTextColor: NSColor {
-        let reference = accentReferenceColor
-        return reference.withAlphaComponent(0.94)
+        accentReferenceColor.withAlphaComponent(0.94)
     }
 
     var selectionColor: NSColor {
-        let alpha = 0.16 + (max(0.0, min(1.0, textColorStrength)) * 0.08)
-        return NSColor(calibratedWhite: 1.0, alpha: alpha)
+        NSColor(calibratedWhite: 1.0, alpha: 0.16 + (clamped(textColorStrength) * 0.08))
     }
 
     var caretColor: NSColor {
-        let reference = accentReferenceColor
-        return NSColor.white.blended(withFraction: 0.10, of: reference) ?? .white
+        NSColor.white.blended(withFraction: 0.10, of: accentReferenceColor) ?? .white
     }
 
     /// A soft, centred dark halo drawn behind the glyphs so the text stays legible
@@ -154,99 +89,72 @@ struct PanelSettings {
     /// trick. A single flat colour can't be readable everywhere; this is why. Fully
     /// transparent (no shadow) when the strength is 0.
     var editorTextShadow: NSShadow {
-        let s = max(0.0, min(1.0, textShadowStrength))
+        let strength = clamped(textShadowStrength)
         let shadow = NSShadow()
         shadow.shadowOffset = .zero
-        shadow.shadowBlurRadius = s <= 0.001 ? 0.0 : 2.0 + (14.0 * s)
-        shadow.shadowColor = s <= 0.001 ? nil : NSColor.black.withAlphaComponent(0.6 + (0.4 * s))
+        shadow.shadowBlurRadius = strength <= 0.001 ? 0.0 : 2.0 + (14.0 * strength)
+        shadow.shadowColor = strength <= 0.001 ? nil : NSColor.black.withAlphaComponent(0.6 + (0.4 * strength))
         return shadow
     }
 
     var documentIndicatorColor: NSColor {
-        let reference = accentReferenceColor
-        return NSColor.white.blended(withFraction: 0.55, of: reference) ?? reference
+        NSColor.white.blended(withFraction: 0.55, of: accentReferenceColor) ?? accentReferenceColor
     }
 
-    var statusTextColor: NSColor {
-        editorCompositeTextColor
+    var statusTextColor: NSColor { editorCompositeTextColor }
+
+    var wrapGuideColor: NSColor {
+        editorCompositeTextColor.withAlphaComponent(clamped(Fixed.wrapGuideOpacity))
+    }
+
+    private var textAlpha: CGFloat {
+        0.56 + (clamped(textColorStrength) * 0.28)
     }
 
     private var accentReferenceColor: NSColor {
-        if colorStrength > 0.001 {
-            return NSColor(calibratedHue: max(0.0, min(1.0, rainbowHue)), saturation: 0.55, brightness: 1.0, alpha: 1.0)
-        }
-
-        if let tintColor {
-            return tintColor.withAlphaComponent(1.0)
-        }
-
-        return NSColor(calibratedWhite: 1.0, alpha: 1.0)
+        guard colorStrength > 0.001 else { return NSColor(calibratedWhite: 1.0, alpha: 1.0) }
+        return NSColor(calibratedHue: clamped(rainbowHue), saturation: 0.55, brightness: 1.0, alpha: 1.0)
     }
+
+    private func clamped(_ value: CGFloat) -> CGFloat { max(0.0, min(1.0, value)) }
+
+    // MARK: Persistence
 
     private static let defaultsKey = "Jot.settings"
     private static let legacyDefaultsKey = "GlassPanel.settings"
 
     init() {}
 
+    /// Loads the stored settings, falling back per key to the calibrated defaults above
+    /// — so those literals exist in exactly one place.
     init(defaults: UserDefaults) {
-        let key: String
-        if defaults.dictionary(forKey: Self.defaultsKey) != nil {
-            key = Self.defaultsKey
-        } else if defaults.dictionary(forKey: Self.legacyDefaultsKey) != nil {
-            key = Self.legacyDefaultsKey
-        } else {
-            self.init()
-            return
+        self.init()
+        guard let stored = defaults.dictionary(forKey: Self.defaultsKey)
+                ?? defaults.dictionary(forKey: Self.legacyDefaultsKey) else { return }
+
+        func number(_ key: String, _ fallback: CGFloat) -> CGFloat {
+            (stored[key] as? Double).map { CGFloat($0) } ?? fallback
         }
-        guard let dictionary = defaults.dictionary(forKey: key) else {
-            self.init()
-            return
+        func flag(_ key: String, _ fallback: Bool) -> Bool {
+            stored[key] as? Bool ?? fallback
         }
 
-        self = PanelSettings()
-        self.glassStyle = GlassStyle(rawValue: dictionary["glassStyle"] as? Int ?? GlassStyle.clear.rawValue) ?? .clear
-        self.cornerRadius = CGFloat(dictionary["cornerRadius"] as? Double ?? 30.0)
-        self.tintStrength = CGFloat(dictionary["tintStrength"] as? Double ?? 0.0)
-        self.warmth = CGFloat(dictionary["warmth"] as? Double ?? 0.0)
-        self.fillOpacity = CGFloat(dictionary["fillOpacity"] as? Double ?? 0.0)
-        self.borderOpacity = CGFloat(dictionary["borderOpacity"] as? Double ?? 0.05)
-        self.sheenOpacity = CGFloat(dictionary["sheenOpacity"] as? Double ?? 0.01)
-        self.shadowOpacity = CGFloat(dictionary["shadowOpacity"] as? Double ?? 0.0)
-        self.shadowBlur = CGFloat(dictionary["shadowBlur"] as? Double ?? 0.0)
-        self.darkeningOpacity = CGFloat(dictionary["darkeningOpacity"] as? Double ?? 0.5952995867768595)
-        self.colorStrength = CGFloat(dictionary["colorStrength"] as? Double ?? 0.1984762396694215)
-        self.rainbowHue = CGFloat(dictionary["rainbowHue"] as? Double ?? 0.4089982857132796)
-        self.rainbowEnabled = dictionary["rainbowEnabled"] as? Bool ?? true
-        self.rainbowSpeed = CGFloat(dictionary["rainbowSpeed"] as? Double ?? 0.05283514616487946)
-        self.alwaysOnTop = dictionary["alwaysOnTop"] as? Bool ?? false
-        self.editorFontSize = CGFloat(dictionary["editorFontSize"] as? Double ?? 19.61813446969697)
-        self.textColorStrength = CGFloat(dictionary["textColorStrength"] as? Double ?? 0.5045408105713924)
-        self.textShadowStrength = CGFloat(dictionary["textShadowStrength"] as? Double ?? 0.1968333431523143)
-        self.blurStrength = CGFloat(dictionary["blurStrength"] as? Double ?? 0.0)
-        self.menuSliderOffset = CGFloat(dictionary["menuSliderOffset"] as? Double ?? 25.0)
-        self.wordWrap = dictionary["wordWrap"] as? Bool ?? true
-        self.showWrapGuides = dictionary["showWrapGuides"] as? Bool ?? true
-        self.renderInlineFormulas = dictionary["renderInlineFormulas"] as? Bool ?? true
-        self.wrapGuideXOffset = CGFloat(dictionary["wrapGuideXOffset"] as? Double ?? 0.0)
-        self.wrapGuideThickness = CGFloat(dictionary["wrapGuideThickness"] as? Double ?? 1.5)
-        self.wrapGuideTopTrim = CGFloat(dictionary["wrapGuideTopTrim"] as? Double ?? 1.0)
-        self.wrapGuideBottomTrim = CGFloat(dictionary["wrapGuideBottomTrim"] as? Double ?? 1.0)
-        self.wrapGuideOpacity = CGFloat(dictionary["wrapGuideOpacity"] as? Double ?? 0.18)
-        self.wrapGuideRounded = dictionary["wrapGuideRounded"] as? Bool ?? false
-        self.documentIndicatorStyle = DocumentIndicatorStyle(rawValue: dictionary["documentIndicatorStyle"] as? Int ?? DocumentIndicatorStyle.dot.rawValue) ?? .dot
+        darkeningOpacity = number("darkeningOpacity", darkeningOpacity)
+        colorStrength = number("colorStrength", colorStrength)
+        rainbowHue = number("rainbowHue", rainbowHue)
+        rainbowEnabled = flag("rainbowEnabled", rainbowEnabled)
+        rainbowSpeed = number("rainbowSpeed", rainbowSpeed)
+        alwaysOnTop = flag("alwaysOnTop", alwaysOnTop)
+        editorFontSize = number("editorFontSize", editorFontSize)
+        textColorStrength = number("textColorStrength", textColorStrength)
+        textShadowStrength = number("textShadowStrength", textShadowStrength)
+        wordWrap = flag("wordWrap", wordWrap)
+        showWrapGuides = flag("showWrapGuides", showWrapGuides)
+        renderInlineFormulas = flag("renderInlineFormulas", renderInlineFormulas)
     }
 
     func save(to defaults: UserDefaults) {
         defaults.set([
-            "glassStyle": glassStyle.rawValue,
-            "cornerRadius": cornerRadius,
-            "tintStrength": tintStrength,
-            "warmth": warmth,
-            "fillOpacity": fillOpacity,
-            "borderOpacity": borderOpacity,
-            "sheenOpacity": sheenOpacity,
-            "shadowOpacity": shadowOpacity,
-            "shadowBlur": shadowBlur,
             "darkeningOpacity": darkeningOpacity,
             "colorStrength": colorStrength,
             "rainbowHue": rainbowHue,
@@ -256,18 +164,9 @@ struct PanelSettings {
             "editorFontSize": editorFontSize,
             "textColorStrength": textColorStrength,
             "textShadowStrength": textShadowStrength,
-            "blurStrength": blurStrength,
-            "menuSliderOffset": menuSliderOffset,
             "wordWrap": wordWrap,
             "showWrapGuides": showWrapGuides,
-            "renderInlineFormulas": renderInlineFormulas,
-            "wrapGuideXOffset": wrapGuideXOffset,
-            "wrapGuideThickness": wrapGuideThickness,
-            "wrapGuideTopTrim": wrapGuideTopTrim,
-            "wrapGuideBottomTrim": wrapGuideBottomTrim,
-            "wrapGuideOpacity": wrapGuideOpacity,
-            "wrapGuideRounded": wrapGuideRounded,
-            "documentIndicatorStyle": documentIndicatorStyle.rawValue
+            "renderInlineFormulas": renderInlineFormulas
         ], forKey: Self.defaultsKey)
     }
 }

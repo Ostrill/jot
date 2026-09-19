@@ -4,7 +4,6 @@
 //
 
 import AppKit
-import CoreImage
 
 final class GlassEditorView: NSView {
     enum TitleBarLayout {
@@ -35,9 +34,6 @@ final class GlassEditorView: NSView {
     private let glassView = NSGlassEffectView(frame: .zero)
     private let contentHost = NSView(frame: .zero)
     private let hitShield = HitTestShieldView(frame: .zero)
-    private let supplementalBlurView = NSVisualEffectView(frame: .zero)
-    private let blurLayer = CALayer()
-    private let fillLayer = CALayer()
     private let colorLayer = CALayer()
     private let dimLayer = CALayer()
     private let borderLayer = CAShapeLayer()
@@ -129,8 +125,6 @@ final class GlassEditorView: NSView {
         glassView.frame = bounds
         contentHost.frame = bounds
         hitShield.frame = bounds
-        blurLayer.frame = bounds
-        fillLayer.frame = bounds
         colorLayer.frame = bounds
         dimLayer.frame = bounds
         borderLayer.frame = bounds
@@ -138,7 +132,6 @@ final class GlassEditorView: NSView {
         CATransaction.commit()
 
         editorScrollView.frame = editorRect
-        supplementalBlurView.frame = bounds
         let maxStatusWidth = max(bounds.width - titleMetrics.leadingReserve - TitleBarLayout.trailingInset, 120.0)
         let statusSize = fileStatusStack.fittingSize
         let clampedWidth = min(statusSize.width, maxStatusWidth)
@@ -170,26 +163,8 @@ final class GlassEditorView: NSView {
         contentHost.layer?.backgroundColor = NSColor.clear.cgColor
         glassView.contentView = contentHost
 
-        supplementalBlurView.blendingMode = .behindWindow
-        supplementalBlurView.material = .hudWindow
-        supplementalBlurView.state = .active
-        supplementalBlurView.isEmphasized = false
-        supplementalBlurView.alphaValue = 0.0
-        supplementalBlurView.isHidden = true
-        contentHost.addSubview(supplementalBlurView)
-
         if let hostLayer = contentHost.layer {
-            blurLayer.actions = [
-                "bounds": NSNull(),
-                "position": NSNull(),
-                "backgroundColor": NSNull(),
-                "cornerRadius": NSNull(),
-                "opacity": NSNull(),
-                "backgroundFilters": NSNull()
-            ]
-            hostLayer.addSublayer(blurLayer)
-
-            [fillLayer, colorLayer, dimLayer].forEach { layer in
+            for layer in [colorLayer, dimLayer] {
                 layer.actions = [
                     "bounds": NSNull(),
                     "position": NSNull(),
@@ -201,7 +176,6 @@ final class GlassEditorView: NSView {
             }
         }
 
-        fillLayer.backgroundColor = settings.fillColor.cgColor
         colorLayer.backgroundColor = settings.accentColor.cgColor
         dimLayer.backgroundColor = settings.dimColor.cgColor
 
@@ -320,35 +294,14 @@ final class GlassEditorView: NSView {
     }
 
     private func applyGlassAppearance() {
-        glassView.style = settings.glassStyle.appKitStyle
-        glassView.cornerRadius = settings.cornerRadius
-        glassView.tintColor = settings.tintColor
+        glassView.style = PanelSettings.Fixed.glassStyle
+        glassView.cornerRadius = PanelSettings.Fixed.cornerRadius
         glassContainer.spacing = 0.0
 
-        fillLayer.backgroundColor = settings.fillColor.cgColor
         colorLayer.backgroundColor = settings.accentColor.cgColor
         dimLayer.backgroundColor = settings.dimColor.cgColor
-        borderLayer.strokeColor = NSColor(calibratedWhite: 1.0, alpha: settings.borderOpacity).cgColor
-        sheenLayer.opacity = Float(settings.sheenOpacity)
-        supplementalBlurView.alphaValue = settings.blurStrength
-        supplementalBlurView.isHidden = settings.blurStrength < 0.001
-        if settings.blurStrength > 0.001 {
-            let blurFilter = CIFilter(name: "CIGaussianBlur")
-            blurFilter?.setDefaults()
-            blurFilter?.setValue(settings.blurStrength * 24.0, forKey: kCIInputRadiusKey)
-            blurLayer.backgroundColor = NSColor(calibratedWhite: 1.0, alpha: 0.015).cgColor
-            blurLayer.backgroundFilters = blurFilter.map { [$0] } ?? []
-            blurLayer.opacity = 1.0
-        } else {
-            blurLayer.backgroundFilters = []
-            blurLayer.backgroundColor = NSColor.clear.cgColor
-            blurLayer.opacity = 0.0
-        }
-
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = Float(settings.shadowOpacity)
-        layer?.shadowRadius = settings.shadowBlur
-        layer?.shadowOffset = CGSize(width: 0.0, height: -8.0)
+        borderLayer.strokeColor = NSColor(calibratedWhite: 1.0, alpha: PanelSettings.Fixed.borderOpacity).cgColor
+        sheenLayer.opacity = Float(PanelSettings.Fixed.sheenOpacity)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -388,9 +341,7 @@ final class GlassEditorView: NSView {
             recolorFormulas(to: currentFormulaTint)
             if !mathPreview.isHidden { mathPreview.applyTint(currentFormulaTint) }
         }
-        wrapGuideView.guideColor = updatedSettings.editorCompositeTextColor.withAlphaComponent(
-            max(0.0, min(1.0, updatedSettings.wrapGuideOpacity))
-        )
+        wrapGuideView.guideColor = updatedSettings.wrapGuideColor
         // Update label colors directly — do NOT call updateFileStatusAppearance here.
         // That function sets needsLayout = true on GlassEditorView, which at 30fps
         // triggers syncEditorLayout() → textContainer invalidation, killing the
@@ -520,14 +471,12 @@ final class GlassEditorView: NSView {
             .font: font,
             .foregroundColor: appearanceSettings.editorTextColor
         ]
-        wrapGuideView.guideColor = appearanceSettings.editorCompositeTextColor.withAlphaComponent(
-            max(0.0, min(1.0, appearanceSettings.wrapGuideOpacity))
-        )
-        wrapGuideView.guideXOffset = appearanceSettings.wrapGuideXOffset
-        wrapGuideView.guideThickness = appearanceSettings.wrapGuideThickness
-        wrapGuideView.guideTopTrim = appearanceSettings.wrapGuideTopTrim
-        wrapGuideView.guideBottomTrim = appearanceSettings.wrapGuideBottomTrim
-        wrapGuideView.roundedCaps = appearanceSettings.wrapGuideRounded
+        wrapGuideView.guideColor = appearanceSettings.wrapGuideColor
+        wrapGuideView.guideXOffset = PanelSettings.Fixed.wrapGuideXOffset
+        wrapGuideView.guideThickness = PanelSettings.Fixed.wrapGuideThickness
+        wrapGuideView.guideTopTrim = PanelSettings.Fixed.wrapGuideTopTrim
+        wrapGuideView.guideBottomTrim = PanelSettings.Fixed.wrapGuideBottomTrim
+        wrapGuideView.roundedCaps = PanelSettings.Fixed.wrapGuideRounded
         if updateSelection {
             editorTextView.selectedTextAttributes = [
                 .backgroundColor: appearanceSettings.selectionColor,
@@ -656,21 +605,20 @@ final class GlassEditorView: NSView {
     }
 
     private func updateChrome() {
+        let radius = PanelSettings.Fixed.cornerRadius
         let path = CGPath(
             roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-            cornerWidth: settings.cornerRadius,
-            cornerHeight: settings.cornerRadius,
+            cornerWidth: radius,
+            cornerHeight: radius,
             transform: nil
         )
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        blurLayer.cornerRadius = settings.cornerRadius
-        fillLayer.cornerRadius = settings.cornerRadius
-        colorLayer.cornerRadius = settings.cornerRadius
-        dimLayer.cornerRadius = settings.cornerRadius
+        colorLayer.cornerRadius = radius
+        dimLayer.cornerRadius = radius
         borderLayer.path = path
-        sheenLayer.cornerRadius = settings.cornerRadius
+        sheenLayer.cornerRadius = radius
         CATransaction.commit()
     }
 
@@ -683,7 +631,7 @@ final class GlassEditorView: NSView {
             return
         }
 
-        fileIndicatorField.stringValue = fileIsEdited ? appearanceSettings.documentIndicatorStyle.symbol : ""
+        fileIndicatorField.stringValue = fileIsEdited ? PanelSettings.Fixed.documentIndicatorSymbol : ""
         fileIndicatorField.textColor = appearanceSettings.documentIndicatorColor
         fileIndicatorField.isHidden = !fileIsEdited
         fileNameField.stringValue = currentFileName

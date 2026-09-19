@@ -50,7 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        normalizeFixedSettings()
         setupMainMenu()
         applySettings()
         NSApp.activate()
@@ -92,16 +91,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleRainbow(_ sender: Any?) {
         settings.rainbowEnabled.toggle()
-        applySettings()
-    }
-
-    @objc private func setClearGlass(_ sender: Any?) {
-        settings.glassStyle = .clear
-        applySettings()
-    }
-
-    @objc private func setRegularGlass(_ sender: Any?) {
-        settings.glassStyle = .regular
         applySettings()
     }
 
@@ -263,28 +252,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func normalizeFixedSettings() {
-        settings.glassStyle = .clear
-        settings.cornerRadius = 30.0
-        settings.tintStrength = 0.0
-        settings.warmth = 0.0
-        settings.fillOpacity = 0.0
-        settings.borderOpacity = 0.05
-        settings.sheenOpacity = 0.01
-        settings.shadowOpacity = 0.0
-        settings.shadowBlur = 0.0
-        settings.blurStrength = 0.0
-        settings.menuSliderOffset = 25.0
-        settings.documentIndicatorStyle = .star
-        // Wrap guide values calibrated by the user; UI removed, preserved here.
-        settings.wrapGuideXOffset = -10.37291937635512
-        settings.wrapGuideThickness = 3.197090105162524
-        settings.wrapGuideTopTrim = 8.003953657818043
-        settings.wrapGuideBottomTrim = 2.254072375033705
-        settings.wrapGuideOpacity = 0.3048133243984811
-        settings.wrapGuideRounded = true
-    }
-
     private func finalizeMenuLayout(_ menu: NSMenu) {
         for item in menu.items {
             if let view = item.view {
@@ -317,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         view.formatter = formatter
         view.onChange = onChange
-        view.horizontalOffset = settings.menuSliderOffset
+        view.horizontalOffset = PanelSettings.Fixed.menuSliderOffset
         view.frame = NSRect(x: 0.0, y: 0.0, width: 220.0, height: 44.0)
         item.view = view
         menu.addItem(item)
@@ -360,7 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderFormulasItem.state = settings.renderInlineFormulas ? .on : .off
 
         for view in sliderViews.values {
-            view.horizontalOffset = settings.menuSliderOffset
+            view.horizontalOffset = PanelSettings.Fixed.menuSliderOffset
         }
 
         sliderViews["darkeningOpacity"]?.doubleValue = settings.darkeningOpacity
