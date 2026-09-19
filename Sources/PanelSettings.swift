@@ -19,7 +19,6 @@ struct PanelSettings {
         static let glassStyle: NSGlassEffectView.Style = .clear
         static let cornerRadius: CGFloat = 30.0
         static let borderOpacity: CGFloat = 0.05
-        static let sheenOpacity: CGFloat = 0.01
         static let menuSliderOffset: CGFloat = 25.0
         /// Shown next to the filename while the document has unsaved changes.
         static let documentIndicatorSymbol = "\u{2736}"          // ✶

@@ -36,8 +36,6 @@ final class GlassEditorView: NSView {
     private let hitShield = HitTestShieldView(frame: .zero)
     private let colorLayer = CALayer()
     private let dimLayer = CALayer()
-    private let borderLayer = CAShapeLayer()
-    private let sheenLayer = CAGradientLayer()
     private let editorScrollView = NSScrollView(frame: .zero)
     private let editorContentView = FlippedContentView(frame: .zero)
     private let wrapGuideView = WrapGuideView(frame: .zero)
@@ -127,8 +125,6 @@ final class GlassEditorView: NSView {
         hitShield.frame = bounds
         colorLayer.frame = bounds
         dimLayer.frame = bounds
-        borderLayer.frame = bounds
-        sheenLayer.frame = bounds
         CATransaction.commit()
 
         editorScrollView.frame = editorRect
@@ -163,9 +159,15 @@ final class GlassEditorView: NSView {
         glassContainer.contentView = glassView
         addSubview(glassContainer)
 
+        // The app's content sits ON TOP of the glass as a sibling, NOT inside
+        // `glassView.contentView`. Anything inside the glass view is drawn by the
+        // WindowServer only while the window is composited live: in a snapshot —
+        // Mission Control, the window switcher, a screenshot, the minimise animation —
+        // the glass collapses to a flat plate and its contentView is not drawn at all,
+        // so the window appeared completely empty there.
         contentHost.wantsLayer = true
         contentHost.layer?.backgroundColor = NSColor.clear.cgColor
-        glassView.contentView = contentHost
+        addSubview(contentHost, positioned: .above, relativeTo: glassContainer)
 
         if let hostLayer = contentHost.layer {
             for layer in [colorLayer, dimLayer] {
@@ -182,34 +184,6 @@ final class GlassEditorView: NSView {
 
         colorLayer.backgroundColor = settings.accentColor.cgColor
         dimLayer.backgroundColor = settings.dimColor.cgColor
-
-        borderLayer.fillColor = NSColor.clear.cgColor
-        borderLayer.lineWidth = 1.0
-        borderLayer.actions = [
-            "bounds": NSNull(),
-            "position": NSNull(),
-            "path": NSNull(),
-            "strokeColor": NSNull(),
-            "opacity": NSNull()
-        ]
-        layer?.addSublayer(borderLayer)
-
-        sheenLayer.colors = [
-            NSColor(calibratedWhite: 1.0, alpha: 0.0).cgColor,
-            NSColor(calibratedWhite: 1.0, alpha: 1.0).cgColor,
-            NSColor(calibratedWhite: 1.0, alpha: 0.45).cgColor,
-            NSColor.clear.cgColor
-        ]
-        sheenLayer.locations = [0.0, 0.14, 0.40, 1.0]
-        sheenLayer.startPoint = CGPoint(x: 0.12, y: 1.0)
-        sheenLayer.endPoint = CGPoint(x: 0.88, y: 0.0)
-        sheenLayer.actions = [
-            "bounds": NSNull(),
-            "position": NSNull(),
-            "cornerRadius": NSNull(),
-            "opacity": NSNull()
-        ]
-        layer?.addSublayer(sheenLayer)
 
         hitShield.wantsLayer = true
         hitShield.layer?.backgroundColor = NSColor(calibratedWhite: 1.0, alpha: 0.001).cgColor
@@ -304,8 +278,6 @@ final class GlassEditorView: NSView {
 
         colorLayer.backgroundColor = settings.accentColor.cgColor
         dimLayer.backgroundColor = settings.dimColor.cgColor
-        borderLayer.strokeColor = NSColor(calibratedWhite: 1.0, alpha: PanelSettings.Fixed.borderOpacity).cgColor
-        sheenLayer.opacity = Float(PanelSettings.Fixed.sheenOpacity)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -591,19 +563,10 @@ final class GlassEditorView: NSView {
 
     private func updateChrome() {
         let radius = PanelSettings.Fixed.cornerRadius
-        let path = CGPath(
-            roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-            cornerWidth: radius,
-            cornerHeight: radius,
-            transform: nil
-        )
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         colorLayer.cornerRadius = radius
         dimLayer.cornerRadius = radius
-        borderLayer.path = path
-        sheenLayer.cornerRadius = radius
         CATransaction.commit()
     }
 
