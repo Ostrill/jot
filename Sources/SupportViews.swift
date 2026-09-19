@@ -48,7 +48,7 @@ final class WrapGuideView: NSView {
         guard isGuideVisible,
               let textView,
               let layoutManager = textView.layoutManager,
-              textView.textContainer != nil else {
+              let textContainer = textView.textContainer else {
             return
         }
 
@@ -63,9 +63,20 @@ final class WrapGuideView: NSView {
         let containerOrigin = textView.textContainerOrigin
         let textStartX = containerOrigin.x + textView.textContainerInset.width
         let lineX = max(2.0, floor((textStartX * 0.5) + guideXOffset))
-        var index = 0
 
-        while index < string.length {
+        // Walk only the lines that intersect the area being redrawn. This view is as
+        // tall as the whole document, so walking every line would make each repaint
+        // cost O(document) — and it repaints on scroll.
+        let boundingRect = dirtyRect.offsetBy(dx: -containerOrigin.x, dy: -containerOrigin.y)
+        let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: boundingRect, in: textContainer)
+        let visibleChars = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+        guard visibleChars.length > 0 || string.length == 0 else { return }
+        // Start at the beginning of the logical line the dirty area starts inside: its
+        // guide may begin above the dirty rect and still cross it.
+        var index = string.lineRange(for: NSRange(location: min(visibleChars.location, string.length), length: 0)).location
+        let limit = NSMaxRange(visibleChars)
+
+        while index < string.length, index <= limit {
             let lineRange = string.lineRange(for: NSRange(location: index, length: 0))
             let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
             var fragments: [CGRect] = []
