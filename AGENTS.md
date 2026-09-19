@@ -12,13 +12,22 @@ text between `$$…$$` renders live via a vendored copy of
 [SwiftMath](https://github.com/mgriebling/SwiftMath).
 
 The project is deliberately flat: **no Xcode project, no storyboards, no asset
-catalog**. The whole app is one file, `main.swift` (~2000 lines), compiled together
-with the SwiftMath sources under `SwiftMath/`.
+catalog**. The app is a handful of plain Swift files under `Sources/`, compiled
+together with the SwiftMath sources under `SwiftMath/`.
 
 ## Repository layout
 
 ```
-main.swift                 ← the entire application
+Sources/                   ← the application
+  PanelSettings.swift      ← app-wide appearance state (UserDefaults)
+  SupportViews.swift       ← window, flipped host, wrap guides, hit shield
+  EditorTextView.swift     ← NSTextView subclass + math-editing host protocol
+  Math.swift               ← inline LaTeX: parser, renderer, attachment, preview
+  SliderMenuItemView.swift ← labelled slider inside a menu item
+  GlassEditorView.swift    ← the per-window editor (glass stack + text layers)
+  Document.swift           ← NSDocument + NSWindowController
+  AppDelegate.swift        ← menus, app-wide appearance, Rainbow timer
+  main.swift               ← entry point
 SwiftMath/                 ← vendored LaTeX renderer (MIT) + Latin Modern Math font
 build.sh                   ← build the app (no external deps)
 make-dmg.sh                ← package Jot.app into a DMG for release
@@ -52,12 +61,16 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
 > The Mach-O executable is still named **`GlassPanel`** (a legacy name;
 > `CFBundleExecutable` in `Info.plist`). The product is always "Jot".
 
-## Architecture (in `main.swift`)
+## Architecture (in `Sources/`)
 
 - **`PanelSettings`** — single state object; serializes to `UserDefaults` under key
   `Jot.settings`; computes derived colors.
 - **`GlassEditorView`** — the glass background, text layers, editor, status, wrap guides.
-- **`AppDelegate`** — window, menus, open/save, the rainbow timer.
+  Reused unchanged by every window.
+- **`JotDocument` / `JotWindowController`** — one document + one window per file;
+  NSDocument gives New/Open/Save, multi-window and the save-on-quit review.
+- **`AppDelegate`** — menus, app-wide appearance, the rainbow timer; broadcasts
+  appearance to every open editor.
 
 ## Non-obvious pitfalls (read before editing)
 

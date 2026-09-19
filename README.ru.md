@@ -30,7 +30,7 @@
 рендерится прямо по месту, пока ты печатаешь.
 
 Проект намеренно крошечный: без Xcode-проекта, без storyboard, без asset catalog —
-всё приложение это один `main.swift` плюс вшитая копия
+всё приложение это несколько обычных Swift-файлов в `Sources/` плюс вшитая копия
 [SwiftMath](https://github.com/mgriebling/SwiftMath) для рендеринга LaTeX.
 
 ## Возможности
@@ -124,12 +124,12 @@
 ```bash
 git clone https://github.com/Ostrill/jot.git
 cd jot
-./build.sh                    # компилирует main.swift + SwiftMath, собирает иконку, вшивает шрифты, ad-hoc подпись
+./build.sh                    # компилирует Sources/ + SwiftMath, собирает иконку, вшивает шрифты, ad-hoc подпись
 open Jot.app                  # smoke-тест
 cp -R Jot.app /Applications/  # установка
 ```
 
-`build.sh` компилирует `main.swift` вместе с вшитыми исходниками SwiftMath,
+`build.sh` компилирует `Sources/*.swift` вместе с вшитыми исходниками SwiftMath,
 генерирует иконку через `sips`/`iconutil`, копирует бандл мат-шрифта в `Jot.app` и
 делает ad-hoc подпись — всё встроенными инструментами Apple.
 
@@ -153,7 +153,7 @@ cp -R Jot.app /Applications/  # установка
 
 ```
 jot/
-├── main.swift   ← всё приложение (~2000 строк)
+├── Sources/     ← приложение (~2400 строк в 9 файлах)
 ├── SwiftMath/   ← вшитый рендерер LaTeX (MIT) + мат-шрифт
 ├── build.sh     ← сборка: компиляция + иконка + шрифты + подпись (без внешних зависимостей)
 ├── make-dmg.sh  ← упаковка Jot.app в DMG

@@ -40,9 +40,11 @@ echo "→ bundling SwiftMath math font"
 rm -rf "$RES/mathFonts.bundle"
 cp -R SwiftMath/mathFonts.bundle "$RES/mathFonts.bundle"
 
-echo "→ compiling (main.swift + SwiftMath)"
+echo "→ compiling (Sources/ + SwiftMath)"
+app_sources=(Sources/*.swift)
 swiftmath_sources=(SwiftMath/**/*.swift)
-xcrun swiftc main.swift "${swiftmath_sources[@]}" -o "$BIN"
+# -O -wmo: optimized, whole-module release build (the app used to ship unoptimized).
+xcrun swiftc -O -wmo "${app_sources[@]}" "${swiftmath_sources[@]}" -o "$BIN"
 
 echo "→ ad-hoc signing"
 xattr -rc "$APP"

@@ -30,7 +30,7 @@ frosted pane that refracts whatever is behind the window. Type math between `$$�
 and it renders inline, right where you're typing.
 
 It's intentionally tiny: no Xcode project, no storyboards, no asset catalog — the
-whole app is one `main.swift` plus a vendored copy of
+whole app is a handful of plain Swift files under `Sources/`, plus a vendored copy of
 [SwiftMath](https://github.com/mgriebling/SwiftMath) for LaTeX rendering.
 
 ## Features
@@ -120,12 +120,12 @@ your own Mac's architecture.
 ```bash
 git clone https://github.com/Ostrill/jot.git
 cd jot
-./build.sh                    # compiles main.swift + SwiftMath, builds the icon, bundles fonts, ad-hoc signs
+./build.sh                    # compiles Sources/ + SwiftMath, builds the icon, bundles fonts, ad-hoc signs
 open Jot.app                  # smoke-test
 cp -R Jot.app /Applications/  # install
 ```
 
-`build.sh` compiles `main.swift` together with the vendored SwiftMath sources,
+`build.sh` compiles `Sources/*.swift` together with the vendored SwiftMath sources,
 generates the app icon with `sips`/`iconutil`, copies the math font bundle into
 `Jot.app`, and ad-hoc signs the result — all with Apple's built-in tools.
 
@@ -149,7 +149,7 @@ afterwards — the notarization step only removes the first-launch prompt.
 
 ```
 jot/
-├── main.swift   ← the entire app (~2000 lines)
+├── Sources/     ← the app (~2400 lines across 9 files)
 ├── SwiftMath/   ← vendored LaTeX renderer (MIT) + math font
 ├── build.sh     ← build: compile + icon + bundle fonts + sign (no external deps)
 ├── make-dmg.sh  ← package Jot.app into a DMG
