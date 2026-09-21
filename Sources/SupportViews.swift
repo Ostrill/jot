@@ -114,8 +114,10 @@ final class BackdropTextView: NSView {
     var textContainerInset: NSSize = NSSize(width: 10.0, height: 6.0)
 
     init(sharing storage: NSTextStorage) {
+        // The width is mirrored from the editor's container (see mirrorBackdropContainer);
+        // tracking a text view would be wrong here — this view is not one.
         textContainer = NSTextContainer(size: NSSize(width: 0.0, height: .greatestFiniteMagnitude))
-        textContainer.widthTracksTextView = true
+        textContainer.widthTracksTextView = false
         super.init(frame: .zero)
         layoutManager.addTextContainer(textContainer)
         storage.addLayoutManager(layoutManager)

@@ -511,12 +511,13 @@ final class GlassEditorView: NSView {
             width: appearanceSettings.wordWrap ? max(editorScrollView.contentSize.width, 120.0) : CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
-        for container in textContainers {
-            if container.widthTracksTextView != appearanceSettings.wordWrap {
-                container.widthTracksTextView = appearanceSettings.wordWrap
+        if let editorContainer = editorTextView.textContainer {
+            if editorContainer.widthTracksTextView != appearanceSettings.wordWrap {
+                editorContainer.widthTracksTextView = appearanceSettings.wordWrap
             }
-            if container.size != containerSize { container.size = containerSize }
+            if editorContainer.size != containerSize { editorContainer.size = containerSize }
         }
+        mirrorBackdropContainer()
     }
 
     /// The backdrop layer carries no attributes of its own — it shares the editor's
@@ -567,12 +568,13 @@ final class GlassEditorView: NSView {
             height: CGFloat.greatestFiniteMagnitude
         )
 
-        for container in textContainers {
-            if container.size != containerSize { container.size = containerSize }
-            if container.widthTracksTextView != settings.wordWrap {
-                container.widthTracksTextView = settings.wordWrap
+        if let editorContainer = editorTextView.textContainer {
+            if editorContainer.size != containerSize { editorContainer.size = containerSize }
+            if editorContainer.widthTracksTextView != settings.wordWrap {
+                editorContainer.widthTracksTextView = settings.wordWrap
             }
         }
+        mirrorBackdropContainer()
 
         // Both layers share one storage and one container width, so one measurement
         // covers them both.
@@ -595,12 +597,23 @@ final class GlassEditorView: NSView {
         wrapGuideView.frame = editorContentView.bounds
         backdropTextView.frame = editorContentView.bounds
         editorTextView.frame = editorContentView.bounds
+        mirrorBackdropContainer()
         wrapGuideView.needsDisplay = true
     }
 
-    /// The text containers of both layers (editor + backdrop) over the shared storage.
-    private var textContainers: [NSTextContainer] {
-        editorTextView.textStorage?.layoutManagers.compactMap(\.textContainers.first) ?? []
+    /// The editor's text view owns its container's width — NSTextView keeps it at its own
+    /// width minus the inset (`widthTracksTextView`), which our plain backdrop view cannot
+    /// do for itself. So the backdrop copies the editor's container verbatim: if the two
+    /// differ by even a few points, the lines wrap differently and the two text layers
+    /// drift further apart the further down the document you look.
+    private func mirrorBackdropContainer() {
+        guard let editorContainer = editorTextView.textContainer else { return }
+        let container = backdropTextView.textContainer
+        if container.widthTracksTextView { container.widthTracksTextView = false }
+        if container.lineFragmentPadding != editorContainer.lineFragmentPadding {
+            container.lineFragmentPadding = editorContainer.lineFragmentPadding
+        }
+        if container.size != editorContainer.size { container.size = editorContainer.size }
     }
 
     /// Runs the exact height measurement once the user stops typing.
