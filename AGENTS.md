@@ -88,9 +88,10 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
    freeze the caret blink or flicker text colour. Prefer updating the view's live
    colour over re-baking settings on every keystroke.
 
-2. **Anything per-keystroke must stay O(edit), not O(document).** Three separate
-   full-document passes used to run on every character typed, and each was ~100× more
-   expensive than the edit itself. In particular:
+2. **Anything that runs per keystroke — or per mouse move — must stay O(edit), not
+   O(document).** Three separate full-document passes used to run on every character
+   typed, and dragging a menu slider pushed a whole new `PanelSettings` into the editor
+   on every mouse move. In particular:
    - **Assigning `NSTextContainer.size` invalidates the layout of the whole document.**
      Write it only when it actually changes (`syncEditorLayout`), or the following
      `ensureLayout` re-lays out the entire file.
@@ -107,9 +108,13 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
      resizing (`syncEditorLayout(deferHeightInLargeDocuments:)`): the content is grown to
      cover the viewport and the caret's line, and the exact measurement runs 100 ms after
      things settle. Asking for it inline is what made a big document stutter.
+   - `applySettings(previous:)` diffs against the previous settings and only writes the
+     font/colour through to the storage when they actually changed. `NSTextView.font`
+     and `.textColor` write into the text storage, so they are not free either.
 
    There is a local harness for all of this under `devtools/` (git-ignored):
-   `devtools/run.sh render|roundtrip|edit|bench|open`, plus a pixel-diff tool, and
+   `devtools/run.sh render|roundtrip|edit|menus|bench|open|settings|viewport`, plus a
+   pixel-diff tool, and
    `BUILD_FROM=<git-ref>` to build the same harness from an older revision for
    before/after comparison. Screen capture is unavailable to agents here, so this is how
    a change is proven not to alter rendering.
