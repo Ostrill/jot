@@ -55,8 +55,21 @@ final class JotWindowController: NSWindowController {
     let editorView = GlassEditorView(frame: .zero)
 
     /// Top-left of the last opened window, so each new one cascades from it instead of
-    /// stacking exactly on top. Reset to `.zero` seeds the first window at screen centre.
+    /// stacking exactly on top. Reset to `.zero` seeds the first window of the launch.
     private static var nextCascadePoint = NSPoint.zero
+
+    /// The last size and position the user left a window at, so Jot opens where it was
+    /// rather than at a fixed default every time.
+    private static let frameDefaultsKey = "Jot.windowFrame"
+
+    private static var rememberedFrame: NSRect? {
+        guard let stored = UserDefaults.standard.string(forKey: frameDefaultsKey) else { return nil }
+        let frame = NSRectFromString(stored)
+        guard frame.width > 100.0, frame.height > 100.0 else { return nil }
+        // A screen may have gone away since; only reuse a frame that is still reachable.
+        guard NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) else { return nil }
+        return frame
+    }
 
     init() {
         let window = PanelWindow(
@@ -91,11 +104,16 @@ final class JotWindowController: NSWindowController {
 
         shouldCascadeWindows = false
         window.contentView = editorView
-        // Cascade each new window from the previous one (Cmd-N no longer stacks them
-        // exactly). cascadeTopLeft wraps back near the top when it reaches a screen edge.
+        // The first window of a launch reopens where the last one was left; every further
+        // one cascades from it (Cmd-N no longer stacks them exactly). cascadeTopLeft wraps
+        // back near the top when it reaches a screen edge.
         if JotWindowController.nextCascadePoint == .zero {
-            window.center()
-            JotWindowController.nextCascadePoint = window.cascadeTopLeft(from: .zero)
+            if let remembered = JotWindowController.rememberedFrame {
+                window.setFrame(remembered, display: false)
+            } else {
+                window.center()
+            }
+            JotWindowController.nextCascadePoint = NSPoint(x: window.frame.minX, y: window.frame.maxY)
         } else {
             JotWindowController.nextCascadePoint = window.cascadeTopLeft(from: JotWindowController.nextCascadePoint)
         }
@@ -110,6 +128,9 @@ final class JotWindowController: NSWindowController {
         let nc = NotificationCenter.default
         for name in [NSWindow.didResizeNotification, NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             nc.addObserver(self, selector: #selector(reflowTitlebar), name: name, object: window)
+        }
+        for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
+            nc.addObserver(self, selector: #selector(rememberWindowFrame), name: name, object: window)
         }
 
         // Adopt the app-wide appearance for this fresh window.
@@ -134,5 +155,10 @@ final class JotWindowController: NSWindowController {
 
     @objc private func reflowTitlebar() {
         editorView.needsLayout = true
+    }
+
+    @objc private func rememberWindowFrame() {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: Self.frameDefaultsKey)
     }
 }
