@@ -38,3 +38,6 @@
 /rebuild.sh
 /rebuild_with_icon.sh
 /PROJECT_DOCUMENTATION.md
+
+# ─── Local test harness (offscreen renderer + pixel diff) ─
+/devtools/

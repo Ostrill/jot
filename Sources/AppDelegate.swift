@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var rainbowTimer: Timer?
     private var lastAnimatedTextHue: CGFloat = 0.0
     private var isAppearanceMenuOpen = false
+    private var lastRainbowTick: Date?
 
     private var alwaysOnTopItem: NSMenuItem!
     private var rainbowItem: NSMenuItem!
@@ -53,18 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMainMenu()
         applySettings()
         NSApp.activate()
-        clearCustomFinderIcon()
         // No window is created here: this is a document-based app, so NSDocumentController
         // opens an untitled document (and its window) on launch, and handles opening files.
-    }
-
-    private func clearCustomFinderIcon() {
-        // Remove any previously set custom Finder icon (e.g. the dark-background
-        // version applied by an earlier build) so Finder uses the bundle icon.
-        let bundlePath = Bundle.main.bundlePath
-        DispatchQueue.global(qos: .utility).async {
-            NSWorkspace.shared.setIcon(nil, forFile: bundlePath, options: [])
-        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -375,39 +366,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sliderViews["textShadowStrength"]?.doubleValue = settings.textShadowStrength
     }
 
+    /// Rainbow drives a very slow hue drift — a full cycle takes ~38 s at the default
+    /// speed. It used to run at 30 fps, which cost ~5% CPU forever just to keep an idle
+    /// window fading, so it now ticks at 12 fps with a generous tolerance (the system can
+    /// coalesce those wake-ups). The hue advances by *elapsed time* rather than per tick,
+    /// so the animation runs at exactly the same speed as before regardless of the rate.
+    private static let rainbowInterval: TimeInterval = 1.0 / 12.0
+    private static let rainbowHuePerSecond: CGFloat = 0.5     // × speed; 1/30 s × speed/60 before
+
     private func updateRainbowTimer() {
         rainbowTimer?.invalidate()
         rainbowTimer = nil
+        lastRainbowTick = nil
 
         if !settings.rainbowEnabled { return }
 
-        rainbowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            // Nothing on screen to animate → don't burn a frame (or advance the hue):
-            // the animation simply resumes where it left off when a window comes back.
-            let editors = self.visibleEditorViews
-            guard !editors.isEmpty else { return }
-
-            self.settings.rainbowHue += max(self.settings.rainbowSpeed, 0.0) / 360.0 * 6.0
-            if self.settings.rainbowHue > 1.0 {
-                self.settings.rainbowHue.formTruncatingRemainder(dividingBy: 1.0)
-            }
-            let hueDelta = self.circularHueDistance(from: self.lastAnimatedTextHue, to: self.settings.rainbowHue)
-            let shouldRefreshTextTint = hueDelta >= 0.025
-            for view in editors {
-                view.applyAnimatedColorUpdate(self.settings, refreshEditorTint: shouldRefreshTextTint)
-            }
-            if shouldRefreshTextTint {
-                self.lastAnimatedTextHue = self.settings.rainbowHue
-            }
-            // Only worth pushing into the menu slider while the menu is actually open.
-            if self.isAppearanceMenuOpen {
-                self.sliderViews["rainbowHue"]?.doubleValue = self.settings.rainbowHue * 360.0
-            }
-            // (Dock-icon hue-tinting removed — the app now ships a static icon.
-            //  See memory note jot-dock-icon-tint for the old implementation.)
+        let timer = Timer.scheduledTimer(withTimeInterval: Self.rainbowInterval, repeats: true) { [weak self] _ in
+            self?.advanceRainbow()
         }
-        RunLoop.main.add(rainbowTimer!, forMode: .common)
+        timer.tolerance = Self.rainbowInterval * 0.3
+        rainbowTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func advanceRainbow() {
+        let now = Date()
+        let elapsed = lastRainbowTick.map { now.timeIntervalSince($0) } ?? Self.rainbowInterval
+        lastRainbowTick = now
+
+        // Nothing on screen to animate → don't burn a frame (or advance the hue):
+        // the animation simply resumes where it left off when a window comes back.
+        let editors = visibleEditorViews
+        guard !editors.isEmpty else { return }
+
+        // Clamped: after the app was idle or asleep, `elapsed` can be huge.
+        let step = max(settings.rainbowSpeed, 0.0) * Self.rainbowHuePerSecond * CGFloat(min(elapsed, 0.5))
+        settings.rainbowHue = (settings.rainbowHue + step).truncatingRemainder(dividingBy: 1.0)
+
+        let hueDelta = circularHueDistance(from: lastAnimatedTextHue, to: settings.rainbowHue)
+        let shouldRefreshTextTint = hueDelta >= 0.025
+        for view in editors {
+            view.applyAnimatedColorUpdate(settings, refreshEditorTint: shouldRefreshTextTint)
+        }
+        if shouldRefreshTextTint {
+            lastAnimatedTextHue = settings.rainbowHue
+        }
+        // Only worth pushing into the menu slider while the menu is actually open.
+        if isAppearanceMenuOpen {
+            sliderViews["rainbowHue"]?.doubleValue = settings.rainbowHue * 360.0
+        }
+        // (Dock-icon hue-tinting removed — the app now ships a static icon.
+        //  See memory note jot-dock-icon-tint for the old implementation.)
     }
 
     private func circularHueDistance(from start: CGFloat, to end: CGFloat) -> CGFloat {
