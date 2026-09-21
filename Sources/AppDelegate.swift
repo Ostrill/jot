@@ -69,6 +69,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // opens an untitled document (and its window) on launch, and handles opening files.
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard settings.rainbowEnabled else { return }
+        for view in visibleEditorViews {
+            view.applyAnimatedColorUpdate(settings, refreshEditorTint: true)
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
@@ -418,8 +425,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let elapsed = lastRainbowTick.map { now.timeIntervalSince($0) } ?? Self.rainbowInterval
         lastRainbowTick = now
 
-        // Nothing on screen to animate → don't burn a frame (or advance the hue):
-        // the animation simply resumes where it left off when a window comes back.
+        // Nothing to animate for → don't burn a frame (or advance the hue): the animation
+        // simply resumes where it left off. That means while you are in another app, or
+        // while every window is minimised, hidden or fully covered.
+        guard NSApp.isActive else { return }
         let editors = visibleEditorViews
         guard !editors.isEmpty else { return }
 
