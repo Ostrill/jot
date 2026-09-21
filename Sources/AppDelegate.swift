@@ -23,6 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var sliderViews: [String: SliderMenuItemView] = [:]
 
+    /// Slider rows are registered at launch as empty menu items and given their view the
+    /// first time the menu opens: building seven of them (stack views + constraints, then
+    /// a forced layout pass) cost ~11 ms of a ~147 ms launch. The menu *items* stay eager
+    /// so their key equivalents work before the menu has ever been opened.
+    private struct PendingSlider {
+        let menu: NSMenu
+        let item: NSMenuItem
+        let build: () -> SliderMenuItemView
+    }
+    private var pendingSliders: [String: PendingSlider] = [:]
+
     /// Open document windows, held weakly so closed ones drop out on their own. Cheaper
     /// than rescanning NSApp.windows, which the Rainbow timer used to do 30×/second.
     private let openControllers = NSHashTable<JotWindowController>.weakObjects()
@@ -111,11 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appearanceItem)
         appearanceItem.submenu = appearanceMenu
 
+        formatMenu.delegate = self
         appearanceMenu.delegate = self
         setupFormatMenu()
         setupAppearanceMenu()
-        finalizeMenuLayout(formatMenu)
-        finalizeMenuLayout(appearanceMenu)
 
         NSApp.mainMenu = mainMenu
     }
@@ -293,20 +303,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onChange: @escaping (Double) -> Void
     ) {
         let item = NSMenuItem()
-        let view = SliderMenuItemView(
-            title: title,
-            minValue: range.lowerBound,
-            maxValue: range.upperBound,
-            initialValue: value,
-            width: 220.0
-        )
-        view.formatter = formatter
-        view.onChange = onChange
-        view.horizontalOffset = PanelSettings.Fixed.menuSliderOffset
-        view.frame = NSRect(x: 0.0, y: 0.0, width: 220.0, height: 44.0)
-        item.view = view
         menu.addItem(item)
-        sliderViews[key] = view
+        pendingSliders[key] = PendingSlider(menu: menu, item: item) {
+            let view = SliderMenuItemView(
+                title: title,
+                minValue: range.lowerBound,
+                maxValue: range.upperBound,
+                initialValue: value,
+                width: 220.0
+            )
+            view.formatter = formatter
+            view.onChange = onChange
+            view.horizontalOffset = PanelSettings.Fixed.menuSliderOffset
+            view.frame = NSRect(x: 0.0, y: 0.0, width: 220.0, height: 44.0)
+            return view
+        }
+    }
+
+    private func materializeSliders(in menu: NSMenu) {
+        let pending = pendingSliders.filter { $0.value.menu === menu }
+        guard !pending.isEmpty else { return }
+        for (key, slider) in pending {
+            let view = slider.build()
+            slider.item.view = view
+            sliderViews[key] = view
+            pendingSliders.removeValue(forKey: key)
+        }
+        finalizeMenuLayout(menu)
+        updateMenuState()
     }
 
     @objc private func increaseFontSize(_ sender: Any?) { adjustFontSize(by: 1.0) }
@@ -426,6 +450,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        materializeSliders(in: menu)
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === appearanceMenu else { return }
         isAppearanceMenuOpen = true
