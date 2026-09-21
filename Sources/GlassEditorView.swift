@@ -14,7 +14,7 @@ final class GlassEditorView: NSView {
     }
 
     var settings = PanelSettings() {
-        didSet { applySettings() }
+        didSet { applySettings(previous: oldValue) }
     }
 
     var onTextDidChange: (() -> Void)?
@@ -202,7 +202,7 @@ final class GlassEditorView: NSView {
         contentHost.addSubview(hitShield)
 
         setupEditor()
-        applySettings()
+        applySettings(previous: nil)
     }
 
     private func setupEditor() {
@@ -272,9 +272,26 @@ final class GlassEditorView: NSView {
         contentHost.addSubview(mathPreview)
     }
 
-    private func applySettings() {
+    /// `previous` is nil the first time round, when everything has to be applied.
+    /// Otherwise only what actually changed is pushed into the document: rewriting the
+    /// font or colour across the storage invalidates the layout of the whole document,
+    /// and settings arrive on *every mouse move* while a menu slider is being dragged.
+    private func applySettings(previous: PanelSettings?) {
         applyGlassAppearance()
-        applyEditorAppearance(using: settings, updateExistingText: true, updateSelection: true)
+        let textAttributesChanged = previous.map {
+            $0.editorFontSize != settings.editorFontSize || $0.editorTextColor != settings.editorTextColor
+        } ?? true
+        let formulaTintChanged = previous.map {
+            $0.editorCompositeTextColor != settings.editorCompositeTextColor
+                || $0.textShadowStrength != settings.textShadowStrength
+                || $0.editorFontSize != settings.editorFontSize
+        } ?? true
+        applyEditorAppearance(
+            using: settings,
+            updateExistingText: textAttributesChanged,
+            updateSelection: true,
+            retintFormulas: formulaTintChanged
+        )
         updateChrome()
     }
 
@@ -426,10 +443,19 @@ final class GlassEditorView: NSView {
         editorTextView.needsDisplay = true
     }
 
-    private func applyEditorAppearance(using appearanceSettings: PanelSettings, updateExistingText: Bool, updateSelection: Bool) {
+    private func applyEditorAppearance(
+        using appearanceSettings: PanelSettings,
+        updateExistingText: Bool,
+        updateSelection: Bool,
+        retintFormulas: Bool = true
+    ) {
         let font = NSFont.monospacedSystemFont(ofSize: appearanceSettings.editorFontSize, weight: .regular)
-        editorTextView.font = font
-        editorTextView.textColor = appearanceSettings.editorTextColor
+        // NSTextView.font/.textColor write through to the storage, so they are set only
+        // when they change — see updateExistingText below.
+        if updateExistingText {
+            editorTextView.font = font
+            editorTextView.textColor = appearanceSettings.editorTextColor
+        }
         editorTextView.insertionPointColor = appearanceSettings.caretColor
         editorTextView.typingAttributes = [
             .font: font,
@@ -459,9 +485,9 @@ final class GlassEditorView: NSView {
             applyMathHighlight()
         }
         currentFormulaTint = appearanceSettings.editorCompositeTextColor
-        recolorFormulas(to: currentFormulaTint)
+        if retintFormulas { recolorFormulas(to: currentFormulaTint) }
         applyBackdropAppearance(using: appearanceSettings)
-        syncEditorLayout()
+        syncEditorLayout(deferHeightInLargeDocuments: true)
     }
 
     private func applyWordWrap(using appearanceSettings: PanelSettings) {
@@ -473,19 +499,18 @@ final class GlassEditorView: NSView {
         backdropTextView.textContainerInset = editorTextView.textContainerInset
         wrapGuideView.isGuideVisible = showsGuides
 
-        if let textContainer = editorTextView.textContainer {
-            textContainer.widthTracksTextView = appearanceSettings.wordWrap
-            textContainer.containerSize = NSSize(
-                width: appearanceSettings.wordWrap ? max(editorScrollView.contentSize.width, 120.0) : CGFloat.greatestFiniteMagnitude,
-                height: CGFloat.greatestFiniteMagnitude
-            )
-        }
-
-        backdropTextView.textContainer.widthTracksTextView = appearanceSettings.wordWrap
-        backdropTextView.textContainer.size = NSSize(
+        // Written only when they change: assigning NSTextContainer.size invalidates the
+        // layout of the whole document (see syncEditorLayout).
+        let containerSize = NSSize(
             width: appearanceSettings.wordWrap ? max(editorScrollView.contentSize.width, 120.0) : CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
+        for container in textContainers {
+            if container.widthTracksTextView != appearanceSettings.wordWrap {
+                container.widthTracksTextView = appearanceSettings.wordWrap
+            }
+            if container.size != containerSize { container.size = containerSize }
+        }
     }
 
     /// The backdrop layer carries no attributes of its own — it shares the editor's
