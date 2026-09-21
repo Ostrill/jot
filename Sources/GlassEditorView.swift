@@ -37,6 +37,7 @@ final class GlassEditorView: NSView {
     private let colorLayer = CALayer()
     private let dimLayer = CALayer()
     private let editorScrollView = NSScrollView(frame: .zero)
+    private let edgeFadeMask = EdgeFadeMaskLayer()
     private let editorContentView = FlippedContentView(frame: .zero)
     private let wrapGuideView = WrapGuideView(frame: .zero)
     private var backdropTextView: BackdropTextView!
@@ -138,6 +139,7 @@ final class GlassEditorView: NSView {
         CATransaction.commit()
 
         editorScrollView.frame = editorRect
+        updateEdgeFade()
         // Only when there is a document to show: laying the stack out at zero width
         // otherwise breaks its own internal spacing constraint.
         if !fileStatusStack.isHidden {
@@ -210,6 +212,17 @@ final class GlassEditorView: NSView {
         editorScrollView.drawsBackground = false
         editorScrollView.automaticallyAdjustsContentInsets = false
         editorScrollView.scrollerStyle = .overlay
+        // Fade the text out against the glass at the top and bottom of the viewport.
+        // The mask goes on the clip view, so it stays put while the content scrolls
+        // under it, and it covers every layer of the editor at once.
+        let clipView = editorScrollView.contentView
+        clipView.wantsLayer = true
+        clipView.layer?.mask = edgeFadeMask
+        clipView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(viewportDidScroll),
+            name: NSView.boundsDidChangeNotification, object: clipView
+        )
 
         editorTextView = makeEditorTextView()
         editorTextView.string = ""
@@ -491,6 +504,26 @@ final class GlassEditorView: NSView {
     /// layout (the layout managers lay out lazily, on demand, for what is drawn) and it
     /// writes frames only when they actually change — assigning the same frame would
     /// still repaint the wrap guides over the whole document.
+    @objc private func viewportDidScroll() {
+        updateEdgeFade()
+    }
+
+    /// Keeps the viewport's fade in step with the scroll position and the window size.
+    private func updateEdgeFade() {
+        let clipView = editorScrollView.contentView
+        let viewport = clipView.bounds
+        let documentHeight = editorContentView.frame.height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        edgeFadeMask.frame = CGRect(origin: .zero, size: viewport.size)
+        CATransaction.commit()
+        edgeFadeMask.update(
+            topHidden: viewport.minY,
+            bottomHidden: documentHeight - viewport.maxY,
+            viewportHeight: viewport.height
+        )
+    }
+
     private func syncEditorLayout(deferHeightInLargeDocuments: Bool = false) {
         let visibleWidth = max(editorScrollView.contentSize.width, 120.0)
         let visibleHeight = max(editorScrollView.contentSize.height, 120.0)
@@ -524,6 +557,7 @@ final class GlassEditorView: NSView {
         guard editorContentView.frame != contentFrame else { return }
 
         editorContentView.frame = contentFrame
+        updateEdgeFade()
         wrapGuideView.frame = editorContentView.bounds
         backdropTextView.frame = editorContentView.bounds
         editorTextView.frame = editorContentView.bounds

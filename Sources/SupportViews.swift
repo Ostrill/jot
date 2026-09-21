@@ -181,6 +181,46 @@ final class BackdropLayoutManager: NSLayoutManager {
     }
 }
 
+/// Softens the top and bottom edges of the scrolled text, so a document doesn't end in a
+/// hard cut against the glass. It is an alpha gradient used as the viewport's mask, and
+/// each edge only fades in once there is actually text hidden past it — a document that
+/// fits in the window is not faded at all.
+final class EdgeFadeMaskLayer: CAGradientLayer {
+    static let fadeHeight: CGFloat = 26.0
+
+    override init() {
+        super.init()
+        startPoint = CGPoint(x: 0.5, y: 0.0)
+        endPoint = CGPoint(x: 0.5, y: 1.0)
+        actions = ["bounds": NSNull(), "position": NSNull(), "colors": NSNull(), "locations": NSNull()]
+        update(topHidden: 0.0, bottomHidden: 0.0, viewportHeight: 0.0)
+    }
+
+    override init(layer: Any) { super.init(layer: layer) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// `topHidden`/`bottomHidden` are how much content is scrolled out of view on each
+    /// side; the fade ramps in over the first `fadeHeight` points of it.
+    func update(topHidden: CGFloat, bottomHidden: CGFloat, viewportHeight: CGFloat) {
+        let height = max(viewportHeight, 1.0)
+        let fade = min(Self.fadeHeight, height / 3.0)
+        let top = min(max(topHidden, 0.0) / Self.fadeHeight, 1.0)
+        let bottom = min(max(bottomHidden, 0.0) / Self.fadeHeight, 1.0)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        colors = [
+            NSColor(calibratedWhite: 1.0, alpha: 1.0 - top).cgColor,
+            NSColor(calibratedWhite: 1.0, alpha: 1.0).cgColor,
+            NSColor(calibratedWhite: 1.0, alpha: 1.0).cgColor,
+            NSColor(calibratedWhite: 1.0, alpha: 1.0 - bottom).cgColor
+        ]
+        locations = [0.0, NSNumber(value: Double(fade / height)),
+                     NSNumber(value: Double(1.0 - fade / height)), 1.0]
+        CATransaction.commit()
+    }
+}
+
 final class HitTestShieldView: NSView {
     override var isOpaque: Bool { false }
     override var mouseDownCanMoveWindow: Bool { true }
