@@ -451,8 +451,10 @@ final class GlassEditorView: NSView {
     ) {
         let font = NSFont.monospacedSystemFont(ofSize: appearanceSettings.editorFontSize, weight: .regular)
         // NSTextView.font/.textColor write through to the storage, so they are set only
-        // when they change — see updateExistingText below.
-        if updateExistingText {
+        // when they change — see updateExistingText below. An empty document costs
+        // nothing to write, and skipping it there would leave the caret at the system
+        // default font until the first edit.
+        if updateExistingText || (editorTextView.textStorage?.length ?? 0) == 0 {
             editorTextView.font = font
             editorTextView.textColor = appearanceSettings.editorTextColor
         }
