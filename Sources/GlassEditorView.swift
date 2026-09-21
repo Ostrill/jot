@@ -218,6 +218,10 @@ final class GlassEditorView: NSView {
         let clipView = editorScrollView.contentView
         clipView.wantsLayer = true
         clipView.layer?.mask = edgeFadeMask
+        // With a mask in place the viewport has to be redrawn as a whole: the scroll
+        // view's default optimisation copies the existing pixels and redraws only the
+        // newly exposed strip, which under a mask leaves torn, stale text behind.
+        clipView.copiesOnScroll = false
         clipView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(
             self, selector: #selector(viewportDidScroll),
@@ -542,7 +546,10 @@ final class GlassEditorView: NSView {
         let documentHeight = editorContentView.frame.height
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        edgeFadeMask.frame = CGRect(origin: .zero, size: viewport.size)
+        // The clip view scrolls by moving its own bounds origin, so the mask has to be
+        // placed at that origin to stay over the viewport. Pinning it at .zero left it
+        // sitting at the top of the *document*: everything scrolled past it vanished.
+        edgeFadeMask.frame = viewport
         CATransaction.commit()
         edgeFadeMask.update(
             topHidden: viewport.minY,
