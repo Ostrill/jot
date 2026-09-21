@@ -537,7 +537,17 @@ final class GlassEditorView: NSView {
     /// writes frames only when they actually change — assigning the same frame would
     /// still repaint the wrap guides over the whole document.
     @objc private func viewportDidScroll() {
+        invalidateBackdrop()
         updateEdgeFade()
+    }
+
+    /// The backdrop is as tall as the document, so it scrolls with the text exactly like
+    /// the editor does — no chance of the two layers separating by a frame. The price is
+    /// that AppKit caches its drawing per region, and a region drawn under an older layout
+    /// would stay on screen (that is what made the text appear doubled). So it is marked
+    /// for redraw on every scroll as well as on every layout change.
+    private func invalidateBackdrop() {
+        backdropTextView.needsDisplay = true
     }
 
     /// Keeps the viewport's fade in step with the scroll position and the window size.
@@ -595,9 +605,10 @@ final class GlassEditorView: NSView {
         editorContentView.frame = contentFrame
         updateEdgeFade()
         wrapGuideView.frame = editorContentView.bounds
-        backdropTextView.frame = editorContentView.bounds
         editorTextView.frame = editorContentView.bounds
+        backdropTextView.frame = editorContentView.bounds
         mirrorBackdropContainer()
+        invalidateBackdrop()
         wrapGuideView.needsDisplay = true
     }
 

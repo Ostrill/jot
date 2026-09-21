@@ -108,6 +108,12 @@ final class WrapGuideView: NSView {
 /// plain view rather than a second NSTextView on purpose: a second text view over the
 /// same storage brings its own selection, responder and undo machinery along, and that
 /// **broke the editor's undo** (verified — ⌘Z stopped reverting anything).
+///
+/// It covers only the visible slice of the document and is moved as the text scrolls. A
+/// document-sized view would have a document-sized, tiled layer, and any tile AppKit did
+/// not think to invalidate kept pixels drawn under an older layout — which showed up as
+/// the text appearing twice, in both layers' colours, a line apart. Staying viewport-sized
+/// makes that impossible, and keeps the layer small.
 final class BackdropTextView: NSView {
     let layoutManager = BackdropLayoutManager()
     let textContainer: NSTextContainer
@@ -129,8 +135,16 @@ final class BackdropTextView: NSView {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
+    /// Where the document's text origin falls in this view's own coordinates. The text
+    /// starts at the inset within the document, and this view starts at `frame.origin`
+    /// within it — the view covers only the visible slice, not the whole document.
+    private var drawingOrigin: NSPoint {
+        NSPoint(x: textContainerInset.width - frame.origin.x,
+                y: textContainerInset.height - frame.origin.y)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        let origin = NSPoint(x: textContainerInset.width, y: textContainerInset.height)
+        let origin = drawingOrigin
         let glyphRange = layoutManager.glyphRange(
             forBoundingRect: dirtyRect.offsetBy(dx: -origin.x, dy: -origin.y),
             in: textContainer
@@ -149,11 +163,38 @@ final class BackdropLayoutManager: NSLayoutManager {
     // Both are pure draw-time state — the caller marks the backdrop view for redraw.
     var glyphColor: NSColor = .white
     var glyphShadow: NSShadow?
-    /// The layout manager has no text view to ask for a redraw, so it asks its view here.
+    /// A layout manager normally tells its NSTextView when to redraw. This one has no
+    /// text view, so every invalidation hook has to be forwarded by hand — and it must
+    /// redraw the *whole* view, not a range: the backdrop is as tall as the document, so
+    /// AppKit keeps its layer in tiles and any tile that is not explicitly invalidated
+    /// keeps pixels drawn under an older layout. That is what made the two text layers
+    /// appear doubled, one line apart, further down a scrolled document.
     var onDisplayInvalidated: (() -> Void)?
 
     override func invalidateDisplay(forCharacterRange charRange: NSRange) {
         super.invalidateDisplay(forCharacterRange: charRange)
+        onDisplayInvalidated?()
+    }
+
+    override func invalidateLayout(forCharacterRange charRange: NSRange, actualCharacterRange: NSRangePointer?) {
+        super.invalidateLayout(forCharacterRange: charRange, actualCharacterRange: actualCharacterRange)
+        onDisplayInvalidated?()
+    }
+
+    override func textContainerChangedGeometry(_ container: NSTextContainer) {
+        super.textContainerChangedGeometry(container)
+        onDisplayInvalidated?()
+    }
+
+    override func processEditing(
+        for textStorage: NSTextStorage,
+        edited editMask: NSTextStorageEditActions,
+        range newCharRange: NSRange,
+        changeInLength delta: Int,
+        invalidatedRange invalidatedCharRange: NSRange
+    ) {
+        super.processEditing(for: textStorage, edited: editMask, range: newCharRange,
+                             changeInLength: delta, invalidatedRange: invalidatedCharRange)
         onDisplayInvalidated?()
     }
 
