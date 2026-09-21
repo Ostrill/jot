@@ -58,6 +58,16 @@ final class GlassEditorView: NSView {
     private var pendingAutoCloseAt: Int?       // caret pos where "$$" should auto-close
     private var highlightedMathRange: NSRange? // the span currently greyed, so it can be un-greyed cheaply
 
+    /// Measuring the document's exact height makes the layout manager catch up on
+    /// everything an edit invalidated — the one thing that can still make typing stutter
+    /// in a very large file (an edit in the middle of 8000 lines cost ~150 ms). Above this
+    /// size the height is not measured on each keystroke: it is grown just enough that the
+    /// caret's line never falls outside it (cheap — that line is laid out anyway), and the
+    /// exact measurement runs shortly after typing stops. Below it, nothing is deferred.
+    private static let inlineHeightMeasurementLimit = 40_000        // characters
+    private static let deferredHeightSyncDelay: TimeInterval = 0.1
+    private var pendingHeightSync: DispatchWorkItem?
+
     private var editorFont: NSFont {
         NSFont.monospacedSystemFont(ofSize: settings.editorFontSize, weight: .regular)
     }
@@ -500,7 +510,7 @@ final class GlassEditorView: NSView {
     /// layout (the layout managers lay out lazily, on demand, for what is drawn) and it
     /// writes frames only when they actually change — assigning the same frame would
     /// still repaint the wrap guides over the whole document.
-    private func syncEditorLayout() {
+    private func syncEditorLayout(deferHeightInLargeDocuments: Bool = false) {
         let visibleWidth = max(editorScrollView.contentSize.width, 120.0)
         let visibleHeight = max(editorScrollView.contentSize.height, 120.0)
         let contentWidth = settings.wordWrap ? visibleWidth : max(measuredTextWidth(), visibleWidth)
@@ -518,11 +528,18 @@ final class GlassEditorView: NSView {
 
         // Both layers share one storage and one container width, so one measurement
         // covers them both.
-        let contentFrame = NSRect(
-            x: 0.0, y: 0.0,
-            width: contentWidth,
-            height: max(measuredTextHeight(), visibleHeight)
-        )
+        let length = editorTextView.textStorage?.length ?? 0
+        let deferHeight = deferHeightInLargeDocuments && length > Self.inlineHeightMeasurementLimit
+        let height: CGFloat
+        if deferHeight {
+            height = max(editorContentView.frame.height, caretLineBottom())
+            scheduleExactHeightSync()
+        } else {
+            pendingHeightSync?.cancel()
+            pendingHeightSync = nil
+            height = measuredTextHeight()
+        }
+        let contentFrame = NSRect(x: 0.0, y: 0.0, width: contentWidth, height: max(height, visibleHeight))
         guard editorContentView.frame != contentFrame else { return }
 
         editorContentView.frame = contentFrame
@@ -537,18 +554,57 @@ final class GlassEditorView: NSView {
         editorTextView.textStorage?.layoutManagers.compactMap(\.textContainers.first) ?? []
     }
 
+    /// Runs the exact height measurement once the user stops typing.
+    private func scheduleExactHeightSync() {
+        pendingHeightSync?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingHeightSync = nil
+            self?.syncEditorLayout()
+        }
+        pendingHeightSync = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.deferredHeightSyncDelay, execute: work)
+    }
+
+    /// Bottom of the line the caret is on, so the content can be grown enough to keep the
+    /// caret visible without measuring the whole document. Cheap: that line has just been
+    /// laid out, and everything before it still is.
+    private func caretLineBottom() -> CGFloat {
+        guard let layoutManager = editorTextView.layoutManager,
+              editorTextView.textContainer != nil,
+              let storage = editorTextView.textStorage else { return 0.0 }
+        let caret = min(editorTextView.selectedRange().location, storage.length)
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: caret)
+        let rect: CGRect
+        if glyphIndex < layoutManager.numberOfGlyphs {
+            rect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        } else if layoutManager.extraLineFragmentTextContainer != nil {
+            rect = layoutManager.extraLineFragmentRect
+        } else {
+            return 0.0
+        }
+        return ceil(rect.maxY + (editorTextView.textContainerInset.height * 2.0) + 6.0)
+    }
+
     private func measuredTextHeight() -> CGFloat {
         guard let layoutManager = editorTextView.layoutManager,
               let textContainer = editorTextView.textContainer else {
             return max(editorScrollView.contentSize.height, 120.0)
         }
-        // ensureLayout only has to catch up on what an edit invalidated — which is why
-        // the container size above is written only when it actually changes: assigning
+        // Measured from the glyphs' bounding rect rather than usedRect: usedRect is
+        // updated *during* the layout pass that the same call triggers, so right after a
+        // large change the first call comes back stale (18 pt for a 2000-line document)
+        // and only a second call is correct. The old code hid that by measuring twice.
+        // This only has to catch up on what an edit invalidated — which is why the
+        // container size is written above only when it actually changes: assigning
         // NSTextContainer.size invalidates the layout of the *whole* document, and doing
-        // that on every keystroke is what used to cost ~90 ms in a 2000-line file.
-        layoutManager.ensureLayout(for: textContainer)
-        let usedHeight = layoutManager.usedRect(for: textContainer).height
-        return ceil(usedHeight + (editorTextView.textContainerInset.height * 2.0) + 6.0)
+        // that on every keystroke used to cost ~90 ms in a 2000-line file.
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var bottom = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).maxY
+        // The empty line after a trailing newline is a fragment of its own.
+        if layoutManager.extraLineFragmentTextContainer === textContainer {
+            bottom = max(bottom, layoutManager.extraLineFragmentRect.maxY)
+        }
+        return ceil(bottom + (editorTextView.textContainerInset.height * 2.0) + 6.0)
     }
 
     private func measuredTextWidth() -> CGFloat {
@@ -556,8 +612,8 @@ final class GlassEditorView: NSView {
               let textContainer = editorTextView.textContainer else {
             return max(editorScrollView.contentSize.width, 120.0)
         }
-        layoutManager.ensureLayout(for: textContainer)
-        let usedWidth = layoutManager.usedRect(for: textContainer).width
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        let usedWidth = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).maxX
         return ceil(usedWidth + (editorTextView.textContainerInset.width * 2.0) + 40.0)
     }
 
@@ -613,7 +669,7 @@ final class GlassEditorView: NSView {
 
 extension GlassEditorView: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
-        syncEditorLayout()
+        syncEditorLayout(deferHeightInLargeDocuments: true)
         scheduleReconcile()
         onTextDidChange?()
     }
@@ -814,7 +870,7 @@ extension GlassEditorView: MathEditingHost {
             hideMathPreview()
             clearMathHighlight()
         }
-        syncEditorLayout()
+        syncEditorLayout(deferHeightInLargeDocuments: true)
     }
 
     /// The only automatic edit: after a just-typed opening "$$", insert the closing
