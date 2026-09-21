@@ -109,15 +109,22 @@ final class WrapGuideView: NSView {
 /// same storage brings its own selection, responder and undo machinery along, and that
 /// **broke the editor's undo** (verified — ⌘Z stopped reverting anything).
 ///
-/// It covers only the visible slice of the document and is moved as the text scrolls. A
-/// document-sized view would have a document-sized, tiled layer, and any tile AppKit did
-/// not think to invalidate kept pixels drawn under an older layout — which showed up as
-/// the text appearing twice, in both layers' colours, a line apart. Staying viewport-sized
-/// makes that impossible, and keeps the layer small.
+/// It is as tall as the document, so it scrolls with the text exactly like the editor does.
+/// The price is that AppKit caches its drawing per region: a region drawn under an older
+/// layout stays on screen unless something invalidates it, which is what made the text
+/// appear doubled in both layers' colours. Hence the invalidation hooks below, and the
+/// container geometry being re-checked at draw time.
 final class BackdropTextView: NSView {
     let layoutManager = BackdropLayoutManager()
     let textContainer: NSTextContainer
     var textContainerInset: NSSize = NSSize(width: 10.0, height: 6.0)
+
+    /// The editor's own container, copied verbatim. An NSTextView re-derives its
+    /// container's width from its frame whenever it is resized, and it does so on its own
+    /// schedule — during a live window resize that can land after everything else. So the
+    /// copy is also refreshed at draw time: if the two containers differ by even a few
+    /// points the lines wrap differently and the layers visibly separate.
+    weak var mirroredContainer: NSTextContainer?
 
     init(sharing storage: NSTextStorage) {
         // The width is mirrored from the editor's container (see mirrorBackdropContainer);
@@ -135,15 +142,27 @@ final class BackdropTextView: NSView {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
-    /// Where the document's text origin falls in this view's own coordinates. The text
-    /// starts at the inset within the document, and this view starts at `frame.origin`
-    /// within it — the view covers only the visible slice, not the whole document.
+    /// Where the document's text origin falls in this view's own coordinates: at the
+    /// inset, offset by wherever this view sits inside the document.
     private var drawingOrigin: NSPoint {
         NSPoint(x: textContainerInset.width - frame.origin.x,
                 y: textContainerInset.height - frame.origin.y)
     }
 
+    /// Copies the editor's container geometry. Safe to call at any time: it does nothing
+    /// unless something actually differs.
+    func mirrorContainerGeometry() {
+        guard let source = mirroredContainer else { return }
+        if textContainer.lineFragmentPadding != source.lineFragmentPadding {
+            textContainer.lineFragmentPadding = source.lineFragmentPadding
+        }
+        if textContainer.size != source.size {
+            textContainer.size = source.size
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        mirrorContainerGeometry()
         let origin = drawingOrigin
         let glyphRange = layoutManager.glyphRange(
             forBoundingRect: dirtyRect.offsetBy(dx: -origin.x, dy: -origin.y),

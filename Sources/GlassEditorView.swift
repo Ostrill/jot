@@ -239,6 +239,7 @@ final class GlassEditorView: NSView {
         // shared storage through its own layout manager (see BackdropTextView).
         backdropTextView = BackdropTextView(sharing: editorTextView.textStorage!)
         backdropTextView.textContainerInset = editorTextView.textContainerInset
+        backdropTextView.mirroredContainer = editorTextView.textContainer
 
         editorContentView.wantsLayer = true
         editorContentView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -614,17 +615,25 @@ final class GlassEditorView: NSView {
 
     /// The editor's text view owns its container's width — NSTextView keeps it at its own
     /// width minus the inset (`widthTracksTextView`), which our plain backdrop view cannot
-    /// do for itself. So the backdrop copies the editor's container verbatim: if the two
-    /// differ by even a few points, the lines wrap differently and the two text layers
-    /// drift further apart the further down the document you look.
+    /// do for itself, so the backdrop copies it verbatim. If the two differ by even a few
+    /// points, the lines wrap differently and the two text layers drift further apart the
+    /// further down the document you look.
     private func mirrorBackdropContainer() {
         guard let editorContainer = editorTextView.textContainer else { return }
         let container = backdropTextView.textContainer
         if container.widthTracksTextView { container.widthTracksTextView = false }
-        if container.lineFragmentPadding != editorContainer.lineFragmentPadding {
-            container.lineFragmentPadding = editorContainer.lineFragmentPadding
-        }
-        if container.size != editorContainer.size { container.size = editorContainer.size }
+        backdropTextView.mirroredContainer = editorContainer
+        backdropTextView.mirrorContainerGeometry()
+    }
+
+    /// An NSTextView updates its container width from its frame on its own schedule, and
+    /// during a live resize that can land after our own layout pass — so both layers are
+    /// re-synced once the drag ends.
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        mirrorBackdropContainer()
+        invalidateBackdrop()
+        syncEditorLayout()
     }
 
     /// Runs the exact height measurement once the user stops typing.
