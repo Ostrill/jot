@@ -76,11 +76,14 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
 
 1. **Two-layer text system.** Text is drawn twice: a near-opaque *backdrop* layer and
    the translucent editor glyphs on top. Both are layout managers over **one shared
-   `NSTextStorage`**, so the backdrop mirrors edits for free — never give the backdrop
-   its own text, font or colour (setting `NSTextView.textColor`/`.string` on it would
-   write into the shared storage). Its colour and the legibility halo are forced at
-   draw time by `BackdropLayoutManager.showCGGlyphs`; the halo lives there and **only**
-   there, because a shadow under a translucent glyph shows through and dims it.
+   `NSTextStorage`**, so the backdrop mirrors edits for free. Its colour and the
+   legibility halo are forced at draw time by `BackdropLayoutManager.showCGGlyphs`; the
+   halo lives there and **only** there, because a shadow under a translucent glyph shows
+   through and dims it.
+   **The backdrop must stay a plain NSView, never a second NSTextView.** A second text
+   view over the same storage brings its own selection/responder/undo machinery and
+   silently **breaks ⌘Z in the editor** — it was shipped broken for a few commits before
+   a harness test caught it.
    The insertion-point blink timer is fragile: mutating settings the wrong way can
    freeze the caret blink or flicker text colour. Prefer updating the view's live
    colour over re-baking settings on every keystroke.
@@ -95,6 +98,21 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
      the whole layout with it — repaint only the range whose colour changes.
    - `MathSyntax.completeSpans` walks the document; parse once per reconcile and pass
      the result around.
+   - **Never measure with `usedRect(for:)`.** It is updated *during* the layout pass the
+     same call triggers, so the first call after a large change returns a stale value
+     (18 pt for a 2000-line document) and only a second, identical call is right. Use
+     `boundingRect(forGlyphRange:in:)` plus the extra line fragment, as
+     `measuredTextHeight()` does.
+   - Above ~40k characters the exact height is **not** measured while typing, opening or
+     resizing (`syncEditorLayout(deferHeightInLargeDocuments:)`): the content is grown to
+     cover the viewport and the caret's line, and the exact measurement runs 100 ms after
+     things settle. Asking for it inline is what made a big document stutter.
+
+   There is a local harness for all of this under `devtools/` (git-ignored):
+   `devtools/run.sh render|roundtrip|edit|bench|open`, plus a pixel-diff tool, and
+   `BUILD_FROM=<git-ref>` to build the same harness from an older revision for
+   before/after comparison. Screen capture is unavailable to agents here, so this is how
+   a change is proven not to alter rendering.
 
 3. **LaTeX = one parser + a deferred reconciler.**
    - `MathSyntax` is the single escape-aware parser (`\$` = literal dollar) used for
