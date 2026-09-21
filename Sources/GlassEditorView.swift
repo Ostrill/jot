@@ -39,8 +39,7 @@ final class GlassEditorView: NSView {
     private let editorScrollView = NSScrollView(frame: .zero)
     private let editorContentView = FlippedContentView(frame: .zero)
     private let wrapGuideView = WrapGuideView(frame: .zero)
-    private let backdropLayoutManager = BackdropLayoutManager()
-    private var backdropTextView = NSTextView(frame: .zero)
+    private var backdropTextView: BackdropTextView!
     private var editorTextView = EditorTextView(frame: .zero)
     private let fileStatusStack = NSStackView()
     private let fileIndicatorField = NSTextField(labelWithString: "")
@@ -58,12 +57,13 @@ final class GlassEditorView: NSView {
     private var pendingAutoCloseAt: Int?       // caret pos where "$$" should auto-close
     private var highlightedMathRange: NSRange? // the span currently greyed, so it can be un-greyed cheaply
 
-    /// Measuring the document's exact height makes the layout manager catch up on
-    /// everything an edit invalidated — the one thing that can still make typing stutter
-    /// in a very large file (an edit in the middle of 8000 lines cost ~150 ms). Above this
-    /// size the height is not measured on each keystroke: it is grown just enough that the
-    /// caret's line never falls outside it (cheap — that line is laid out anyway), and the
-    /// exact measurement runs shortly after typing stops. Below it, nothing is deferred.
+    /// Measuring the document's exact height makes the layout manager lay out everything
+    /// that changed — the one thing that can still make a big document stutter (an edit in
+    /// the middle of 8000 lines cost ~150 ms; opening 2000 lines, ~230 ms). Above this size
+    /// the height is not measured while typing, opening or resizing: the content is grown
+    /// just enough to cover the viewport and the caret's own line (cheap — that line is
+    /// laid out anyway), and the exact measurement runs shortly after things settle.
+    /// Below this size nothing is deferred.
     private static let inlineHeightMeasurementLimit = 40_000        // characters
     private static let deferredHeightSyncDelay: TimeInterval = 0.1
     private var pendingHeightSync: DispatchWorkItem?
@@ -151,7 +151,7 @@ final class GlassEditorView: NSView {
                 height: statusSize.height
             )
         }
-        syncEditorLayout()
+        syncEditorLayout(deferHeightInLargeDocuments: true)
         // Keep the preview under the formula when the window is resized (not only on
         // keystrokes), so it no longer drifts relative to the window's bottom edge.
         if let r = mathEditRange, !mathPreview.isHidden {
@@ -218,26 +218,10 @@ final class GlassEditorView: NSView {
         // managers — so it mirrors every edit for free. (It used to be a second,
         // independent text view whose whole content was copied over on every
         // keystroke, which meant a full relayout of the document per character.)
-        // It carries no attributes of its own: BackdropLayoutManager forces the
-        // colour and halo at draw time.
-        let backdropContainer = NSTextContainer(size: NSSize(width: 0.0, height: .greatestFiniteMagnitude))
-        backdropContainer.widthTracksTextView = true
-        backdropLayoutManager.addTextContainer(backdropContainer)
-        editorTextView.textStorage?.addLayoutManager(backdropLayoutManager)
-
-        backdropTextView = NSTextView(frame: .zero, textContainer: backdropContainer)
-        backdropTextView.minSize = editorTextView.minSize
-        backdropTextView.maxSize = editorTextView.maxSize
-        backdropTextView.isVerticallyResizable = true
-        backdropTextView.isHorizontallyResizable = false
-        backdropTextView.autoresizingMask = [.width]
-        backdropTextView.drawsBackground = false
-        backdropTextView.backgroundColor = .clear
+        // It carries no attributes of its own and is not a text view: it just draws the
+        // shared storage through its own layout manager (see BackdropTextView).
+        backdropTextView = BackdropTextView(sharing: editorTextView.textStorage!)
         backdropTextView.textContainerInset = editorTextView.textContainerInset
-        backdropTextView.isRichText = false
-        backdropTextView.importsGraphics = false
-        backdropTextView.isEditable = false
-        backdropTextView.isSelectable = false
 
         editorContentView.wantsLayer = true
         editorContentView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -317,7 +301,7 @@ final class GlassEditorView: NSView {
 
     func applyAnimatedColorUpdate(_ updatedSettings: PanelSettings, refreshEditorTint: Bool) {
         colorLayer.backgroundColor = updatedSettings.accentColor.cgColor
-        backdropLayoutManager.glyphColor = updatedSettings.backdropTextColor
+        backdropTextView.layoutManager.glyphColor = updatedSettings.backdropTextColor
         backdropTextView.needsDisplay = true
         // Formulas are bitmaps, so they can't ride the backdrop's glyph colour like
         // the text — retint them (throttled via refreshEditorTint) so they
@@ -361,7 +345,7 @@ final class GlassEditorView: NSView {
         highlightedMathRange = nil
         pendingAutoCloseAt = nil
         hideMathPreview()
-        syncEditorLayout()
+        syncEditorLayout(deferHeightInLargeDocuments: true)
     }
 
     /// Re-runs the document through the parser under the current renderInlineFormulas
@@ -472,7 +456,6 @@ final class GlassEditorView: NSView {
 
         editorScrollView.hasHorizontalScroller = !appearanceSettings.wordWrap
         editorTextView.isHorizontallyResizable = !appearanceSettings.wordWrap
-        backdropTextView.isHorizontallyResizable = !appearanceSettings.wordWrap
         editorTextView.textContainerInset = NSSize(width: 10.0, height: 6.0)
         backdropTextView.textContainerInset = editorTextView.textContainerInset
         wrapGuideView.isGuideVisible = showsGuides
@@ -485,13 +468,11 @@ final class GlassEditorView: NSView {
             )
         }
 
-        if let textContainer = backdropTextView.textContainer {
-            textContainer.widthTracksTextView = appearanceSettings.wordWrap
-            textContainer.containerSize = NSSize(
-                width: appearanceSettings.wordWrap ? max(editorScrollView.contentSize.width, 120.0) : CGFloat.greatestFiniteMagnitude,
-                height: CGFloat.greatestFiniteMagnitude
-            )
-        }
+        backdropTextView.textContainer.widthTracksTextView = appearanceSettings.wordWrap
+        backdropTextView.textContainer.size = NSSize(
+            width: appearanceSettings.wordWrap ? max(editorScrollView.contentSize.width, 120.0) : CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
     }
 
     /// The backdrop layer carries no attributes of its own — it shares the editor's
@@ -500,8 +481,8 @@ final class GlassEditorView: NSView {
     /// under a translucent glyph shows through and dims it, whereas the ~0.94-opaque
     /// backdrop glyph covers it, leaving only the halo *around* the text.
     private func applyBackdropAppearance(using appearanceSettings: PanelSettings) {
-        backdropLayoutManager.glyphShadow = appearanceSettings.editorTextShadow
-        backdropLayoutManager.glyphColor = appearanceSettings.backdropTextColor
+        backdropTextView.layoutManager.glyphShadow = appearanceSettings.editorTextShadow
+        backdropTextView.layoutManager.glyphColor = appearanceSettings.backdropTextColor
         backdropTextView.needsDisplay = true
     }
 

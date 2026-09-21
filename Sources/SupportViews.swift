@@ -99,18 +99,61 @@ final class WrapGuideView: NSView {
     }
 }
 
-/// Layout manager for the backdrop text layer: draws every glyph in one colour with
-/// the legibility halo, ignoring whatever colours the storage carries.
+/// The backdrop text layer: the editor's text drawn a second time underneath the
+/// translucent editor glyphs, as a near-opaque sheet in one colour with the legibility
+/// halo behind it.
 ///
-/// This is what lets the two text layers **share a single NSTextStorage**: the backdrop
-/// needs no attributes of its own, so there is nothing to copy on each keystroke and the
-/// layers can never drift out of alignment. The halo is set on the context here (rather
-/// than as a `.shadow` attribute) so it applies to glyphs only — formula attachments keep
-/// the halo baked into their bitmap, exactly as before.
+/// It shares the editor's `NSTextStorage` through its own layout manager, so it mirrors
+/// every edit with nothing to copy and the two layers can never drift apart. It is a
+/// plain view rather than a second NSTextView on purpose: a second text view over the
+/// same storage brings its own selection, responder and undo machinery along, and that
+/// **broke the editor's undo** (verified — ⌘Z stopped reverting anything).
+final class BackdropTextView: NSView {
+    let layoutManager = BackdropLayoutManager()
+    let textContainer: NSTextContainer
+    var textContainerInset: NSSize = NSSize(width: 10.0, height: 6.0)
+
+    init(sharing storage: NSTextStorage) {
+        textContainer = NSTextContainer(size: NSSize(width: 0.0, height: .greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        super.init(frame: .zero)
+        layoutManager.addTextContainer(textContainer)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.onDisplayInvalidated = { [weak self] in self?.needsDisplay = true }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let origin = NSPoint(x: textContainerInset.width, y: textContainerInset.height)
+        let glyphRange = layoutManager.glyphRange(
+            forBoundingRect: dirtyRect.offsetBy(dx: -origin.x, dy: -origin.y),
+            in: textContainer
+        )
+        guard glyphRange.length > 0 else { return }
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+    }
+}
+
+/// Forces every glyph to one colour with the legibility halo, ignoring whatever colours
+/// the shared storage carries — which is what lets the backdrop hold no attributes of
+/// its own. The halo is set on the context here rather than as a `.shadow` attribute so
+/// it applies to glyphs only: formula attachments keep the halo baked into their bitmap.
 final class BackdropLayoutManager: NSLayoutManager {
     // Both are pure draw-time state — the caller marks the backdrop view for redraw.
     var glyphColor: NSColor = .white
     var glyphShadow: NSShadow?
+    /// The layout manager has no text view to ask for a redraw, so it asks its view here.
+    var onDisplayInvalidated: (() -> Void)?
+
+    override func invalidateDisplay(forCharacterRange charRange: NSRange) {
+        super.invalidateDisplay(forCharacterRange: charRange)
+        onDisplayInvalidated?()
+    }
 
     override func showCGGlyphs(
         _ glyphs: UnsafePointer<CGGlyph>,
