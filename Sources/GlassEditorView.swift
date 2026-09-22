@@ -100,6 +100,9 @@ final class GlassEditorView: NSView {
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
+        // ⌘F: AppKit's find bar, which lives inside the scroll view above the text.
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         return textView
     }
 

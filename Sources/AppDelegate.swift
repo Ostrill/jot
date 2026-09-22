@@ -7,6 +7,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appearanceMenu = NSMenu(title: "Appearance")
+    private let recentMenu = NSMenu(title: "Open Recent")
     private let formatMenu = NSMenu(title: "Format")
     private let defaults = UserDefaults.standard
     private var settings = PanelSettings(defaults: .standard)
@@ -143,6 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // chain to NSDocumentController / the key window's NSDocument.
         menu.addItem(NSMenuItem(title: "New", action: #selector(NSDocumentController.newDocument(_:)), keyEquivalent: "n"))
         menu.addItem(NSMenuItem(title: "Open…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o"))
+        // Filled in when the submenu is about to open — see menuNeedsUpdate.
+        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        recentMenu.delegate = self
+        recentItem.submenu = recentMenu
+        menu.addItem(recentItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
         menu.addItem(NSMenuItem(title: "Save", action: #selector(NSDocument.save(_:)), keyEquivalent: "s"))
@@ -163,6 +169,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        menu.addItem(.separator())
+
+        let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        findItem.submenu = makeFindMenu()
+        menu.addItem(findItem)
+        return menu
+    }
+
+    /// The editor's built-in find bar. Each item carries the NSTextFinder action as its
+    /// tag and is sent to the focused text view through the responder chain, which is how
+    /// AppKit's own Find menu is wired.
+    private func makeFindMenu() -> NSMenu {
+        let menu = NSMenu(title: "Find")
+        let findAction = Selector(("performTextFinderAction:"))
+        func add(_ title: String, _ action: NSTextFinder.Action, _ key: String, _ modifiers: NSEvent.ModifierFlags = .command) {
+            let item = NSMenuItem(title: title, action: findAction, keyEquivalent: key)
+            item.tag = action.rawValue
+            item.keyEquivalentModifierMask = modifiers
+            menu.addItem(item)
+        }
+        add("Find…", .showFindInterface, "f")
+        add("Find and Replace…", .showReplaceInterface, "f", [.command, .option])
+        add("Find Next", .nextMatch, "g")
+        add("Find Previous", .previousMatch, "G")
+        add("Use Selection for Find", .setSearchString, "e")
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Jump to Selection",
+                                action: #selector(NSTextView.centerSelectionInVisibleArea(_:)),
+                                keyEquivalent: "j"))
         return menu
     }
 
@@ -327,6 +362,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// NSDocumentController tracks opened files for us; this just presents them.
+    private func rebuildRecentDocumentsMenu() {
+        recentMenu.removeAllItems()
+        let urls = NSDocumentController.shared.recentDocumentURLs
+        guard !urls.isEmpty else {
+            let empty = NSMenuItem(title: "No Recent Documents", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            recentMenu.addItem(empty)
+            return
+        }
+        for url in urls {
+            let item = NSMenuItem(title: url.lastPathComponent, action: #selector(openRecentDocument(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url
+            item.toolTip = url.path
+            item.image = NSWorkspace.shared.icon(forFile: url.path)
+            item.image?.size = NSSize(width: 16.0, height: 16.0)
+            recentMenu.addItem(item)
+        }
+        recentMenu.addItem(.separator())
+        let clear = NSMenuItem(title: "Clear Menu", action: #selector(clearRecentDocuments(_:)), keyEquivalent: "")
+        clear.target = self
+        recentMenu.addItem(clear)
+    }
+
+    @objc private func openRecentDocument(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
+            guard let error else { return }
+            NSApp.presentError(error)
+        }
+    }
+
+    @objc private func clearRecentDocuments(_ sender: Any?) {
+        NSDocumentController.shared.clearRecentDocuments(sender)
+    }
+
     private func materializeSliders(in menu: NSMenu) {
         let pending = pendingSliders.filter { $0.value.menu === menu }
         guard !pending.isEmpty else { return }
@@ -460,6 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === recentMenu { rebuildRecentDocumentsMenu() }
         materializeSliders(in: menu)
     }
 
