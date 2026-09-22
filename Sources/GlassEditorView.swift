@@ -538,17 +538,19 @@ final class GlassEditorView: NSView {
     /// writes frames only when they actually change — assigning the same frame would
     /// still repaint the wrap guides over the whole document.
     @objc private func viewportDidScroll() {
-        invalidateBackdrop()
+        invalidateTextLayers()
         updateEdgeFade()
     }
 
-    /// The backdrop is as tall as the document, so it scrolls with the text exactly like
-    /// the editor does — no chance of the two layers separating by a frame. The price is
-    /// that AppKit caches its drawing per region, and a region drawn under an older layout
-    /// would stay on screen (that is what made the text appear doubled). So it is marked
-    /// for redraw on every scroll as well as on every layout change.
-    private func invalidateBackdrop() {
+    /// Both of these are plain views as tall as the document whose drawing depends on the
+    /// text layout, so they scroll with the text exactly like the editor does — no chance
+    /// of a layer separating by a frame. The price is that AppKit caches their drawing per
+    /// region, and a region drawn under an older layout would stay on screen: that is what
+    /// made the text appear doubled. Neither has an NSTextView to invalidate them, so they
+    /// are marked for redraw on every scroll as well as on every layout change.
+    private func invalidateTextLayers() {
         backdropTextView.needsDisplay = true
+        wrapGuideView.needsDisplay = true
     }
 
     /// Keeps the viewport's fade in step with the scroll position and the window size.
@@ -609,8 +611,7 @@ final class GlassEditorView: NSView {
         editorTextView.frame = editorContentView.bounds
         backdropTextView.frame = editorContentView.bounds
         mirrorBackdropContainer()
-        invalidateBackdrop()
-        wrapGuideView.needsDisplay = true
+        invalidateTextLayers()
     }
 
     /// The editor's text view owns its container's width — NSTextView keeps it at its own
@@ -632,7 +633,7 @@ final class GlassEditorView: NSView {
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         mirrorBackdropContainer()
-        invalidateBackdrop()
+        invalidateTextLayers()
         syncEditorLayout()
     }
 
