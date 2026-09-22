@@ -92,13 +92,7 @@ final class JotWindowController: NSWindowController {
         // auxiliary panel.
         window.collectionBehavior = [.managed, .fullScreenPrimary]
         window.minSize = NSSize(width: 360.0, height: 240.0)
-        // A transparent, empty unified toolbar raises the titlebar height so AppKit
-        // itself lays the traffic lights out lower and inset — clear of our big rounded
-        // corner, hover tracking intact. (A titlebar *accessory* did NOT grow it; and do
-        // not use setFrameOrigin — it desyncs the buttons' hover zones.)
-        let toolbar = NSToolbar(identifier: "JotToolbar")
-        window.toolbar = toolbar
-        window.toolbarStyle = .unified
+        JotWindowController.installTitlebarToolbar(on: window)
 
         super.init(window: window)          // phase 2 — self / editorView now usable
 
@@ -129,6 +123,10 @@ final class JotWindowController: NSWindowController {
         for name in [NSWindow.didResizeNotification, NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             nc.addObserver(self, selector: #selector(reflowTitlebar), name: name, object: window)
         }
+        nc.addObserver(self, selector: #selector(windowDidEnterFullScreen),
+                       name: NSWindow.didEnterFullScreenNotification, object: window)
+        nc.addObserver(self, selector: #selector(windowDidExitFullScreen),
+                       name: NSWindow.didExitFullScreenNotification, object: window)
         for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
             nc.addObserver(self, selector: #selector(rememberWindowFrame), name: name, object: window)
         }
@@ -138,6 +136,30 @@ final class JotWindowController: NSWindowController {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// A transparent, empty unified toolbar raises the titlebar height so AppKit itself
+    /// lays the traffic lights out lower and inset — clear of the big rounded corner, hover
+    /// tracking intact. (A titlebar *accessory* did NOT grow it; and do not use
+    /// setFrameOrigin — it desyncs the buttons' hover zones.)
+    ///
+    /// It is removed in full screen, where there are no traffic lights to push down and it
+    /// would only show up as a grey bar across the top.
+    private static func installTitlebarToolbar(on window: NSWindow) {
+        let toolbar = NSToolbar(identifier: "JotToolbar")
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
+    }
+
+    @objc private func windowDidEnterFullScreen() {
+        window?.toolbar = nil
+        editorView.needsLayout = true
+    }
+
+    @objc private func windowDidExitFullScreen() {
+        guard let window else { return }
+        JotWindowController.installTitlebarToolbar(on: window)
+        editorView.needsLayout = true
+    }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
