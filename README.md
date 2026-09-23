@@ -42,6 +42,8 @@ whole app is a handful of plain Swift files under `Sources/`, plus a vendored co
 - `⚙️` **Appearance controls** — darkening, color strength, hue, rainbow speed, text opacity, always-on-top.
 - `📏` **Word wrap + wrapped-line guides** — subtle markers show where long lines were folded.
 - `📄` **Plain-text files** — open/save with an unsaved-changes indicator (`✶`).
+- `🔍` **Find & replace with regular expressions** — a small glass bar (<kbd>⌘</kbd> + <kbd>F</kbd>);
+  toggle `.*` for regex (replace with `$1`, `\n`), `Aa` for case. One <kbd>⌘</kbd> + <kbd>Z</kbd> undoes a Replace All.
 - `⚡️` **Native, fast, self-contained** — one Swift file, no Xcode required to build.
 
 ## Screenshots
@@ -83,6 +85,9 @@ Notes:
 | Open…     | <kbd>⌘</kbd> + <kbd>O</kbd> |
 | Save      | <kbd>⌘</kbd> + <kbd>S</kbd> |
 | Save As…  | <kbd>⇧</kbd> + <kbd>⌘</kbd> + <kbd>S</kbd> |
+| Find… / Find and Replace… | <kbd>⌘</kbd> + <kbd>F</kbd> / <kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>F</kbd> |
+| Find Next / Previous | <kbd>⌘</kbd> + <kbd>G</kbd> / <kbd>⇧</kbd> + <kbd>⌘</kbd> + <kbd>G</kbd> (or <kbd>↩</kbd> / <kbd>⇧</kbd> + <kbd>↩</kbd> in the bar) |
+| Use Selection for Find | <kbd>⌘</kbd> + <kbd>E</kbd> |
 | Quit Jot  | <kbd>⌘</kbd> + <kbd>Q</kbd> |
 
 - **Format:** Font Size (slider), Word Wrap, Wrapped Line Guides, Render LaTeX Formulas

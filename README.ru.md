@@ -45,6 +45,9 @@
 - `📏` **Перенос строк + направляющие** — ненавязчивые метки показывают, где длинная
   строка была перенесена.
 - `📄` **Текстовые файлы** — открытие/сохранение с индикатором несохранённых изменений (`✶`).
+- `🔍` **Поиск и замена, в том числе по регулярным выражениям** — маленькая стеклянная панель
+  (<kbd>⌘</kbd> + <kbd>F</kbd>); переключатель `.*` — регулярка (в замене `$1`, `\n`), `Aa` — регистр.
+  «Заменить всё» отменяется одним <kbd>⌘</kbd> + <kbd>Z</kbd>.
 - `⚡️` **Нативное, быстрое, самодостаточное** — один Swift-файл, для сборки Xcode не нужен.
 
 ## Скриншоты
@@ -87,6 +90,9 @@
 | Open…     | <kbd>⌘</kbd> + <kbd>O</kbd> |
 | Save      | <kbd>⌘</kbd> + <kbd>S</kbd> |
 | Save As…  | <kbd>⇧</kbd> + <kbd>⌘</kbd> + <kbd>S</kbd> |
+| Find… / Find and Replace… | <kbd>⌘</kbd> + <kbd>F</kbd> / <kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>F</kbd> |
+| Find Next / Previous | <kbd>⌘</kbd> + <kbd>G</kbd> / <kbd>⇧</kbd> + <kbd>⌘</kbd> + <kbd>G</kbd> (или <kbd>↩</kbd> / <kbd>⇧</kbd> + <kbd>↩</kbd> в панели) |
+| Use Selection for Find | <kbd>⌘</kbd> + <kbd>E</kbd> |
 | Quit Jot  | <kbd>⌘</kbd> + <kbd>Q</kbd> |
 
 - **Format:** Font Size (слайдер), Word Wrap, Wrapped Line Guides, Render LaTeX Formulas

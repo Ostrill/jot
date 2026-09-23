@@ -58,6 +58,9 @@ final class GlassEditorView: NSView {
     private var pendingAutoCloseAt: Int?       // caret pos where "$$" should auto-close
     private var highlightedMathRange: NSRange? // the span currently greyed, so it can be un-greyed cheaply
 
+    /// Find & replace — built the first time it is asked for (see FindBar.swift).
+    private var finder: EditorFindController?
+
     /// Measuring the document's exact height makes the layout manager lay out everything
     /// that changed — the one thing that can still make a big document stutter (an edit in
     /// the middle of 8000 lines cost ~150 ms; opening 2000 lines, ~230 ms). Above this size
@@ -100,9 +103,6 @@ final class GlassEditorView: NSView {
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
-        // ⌘F: AppKit's find bar, which lives inside the scroll view above the text.
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
         return textView
     }
 
@@ -143,6 +143,7 @@ final class GlassEditorView: NSView {
         CATransaction.commit()
 
         editorScrollView.frame = editorRect
+        layoutFindBar()
         updateEdgeFade()
         // Only when there is a document to show: laying the stack out at zero width
         // otherwise breaks its own internal spacing constraint.
@@ -234,6 +235,11 @@ final class GlassEditorView: NSView {
 
         editorTextView = makeEditorTextView()
         editorTextView.string = ""
+        editorTextView.cancelHandler = { [weak self] in
+            guard let finder = self?.finder, finder.isVisible else { return false }
+            finder.hide()
+            return true
+        }
 
         // The backdrop shares the editor's text storage — one storage, two layout
         // managers — so it mirrors every edit for free. (It used to be a second,
@@ -1168,4 +1174,69 @@ extension GlassEditorView: MathEditingHost {
         backdropTextView.needsDisplay = true
     }
 
+}
+
+// MARK: - Find & replace
+//
+// The bar itself and the searching live in FindBar.swift; this is where the editor hosts
+// it. Edit ▸ Find sends performFindBarAction(_:) up the responder chain — from the text
+// view or from the bar's own fields alike — with an NSTextFinder.Action as the tag.
+
+extension GlassEditorView: NSMenuItemValidation {
+    @objc func performFindBarAction(_ sender: Any?) {
+        guard let tag = (sender as? NSMenuItem)?.tag,
+              let action = NSTextFinder.Action(rawValue: tag) else { return }
+        findController().perform(action)
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(performFindBarAction(_:)) else { return true }
+        if item.tag == NSTextFinder.Action.setSearchString.rawValue {
+            return editorTextView.selectedRange().length > 0
+        }
+        return true
+    }
+
+    private func findController() -> EditorFindController {
+        if let finder { return finder }
+        let controller = EditorFindController(textView: editorTextView)
+        controller.revealRange = { [weak self] in self?.revealFoundRange($0) }
+        controller.onLayoutChange = { [weak self] in self?.layoutFindBar() }
+        contentHost.addSubview(controller.bar)
+        finder = controller
+        return controller
+    }
+
+    /// The bar floats over the top-right corner of the text.
+    private func layoutFindBar() {
+        guard let bar = finder?.bar, !bar.isHidden else { return }
+        let area = editorScrollView.frame
+        let size = bar.preferredSize
+        let width = min(size.width, area.width - 16.0)
+        bar.frame = NSRect(x: area.maxX - width - 8.0, y: area.maxY - size.height - 2.0,
+                           width: width, height: size.height)
+    }
+
+    /// Scrolls a found match into view, clear of the bar and of the faded edges.
+    private func revealFoundRange(_ range: NSRange) {
+        guard let layoutManager = editorTextView.layoutManager,
+              let textContainer = editorTextView.textContainer,
+              let storage = editorTextView.textStorage, NSMaxRange(range) <= storage.length else { return }
+        layoutManager.ensureLayout(forCharacterRange: range)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let origin = editorTextView.textContainerOrigin
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            .offsetBy(dx: origin.x, dy: origin.y)
+        // A large document's height is measured lazily and may not reach the match yet.
+        if rect.maxY > editorContentView.frame.height { syncEditorLayout() }
+
+        var barClearance: CGFloat = 0.0
+        if let bar = finder?.bar, !bar.isHidden {
+            barClearance = max(0.0, editorScrollView.frame.maxY - bar.frame.minY)
+        }
+        rect = rect.insetBy(dx: -24.0, dy: -(EdgeFadeMaskLayer.fadeHeight + 4.0))
+        rect.origin.y -= barClearance           // the text view is flipped: this is "up"
+        rect.size.height += barClearance
+        editorTextView.scrollToVisible(rect)
+    }
 }

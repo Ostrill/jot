@@ -16,6 +16,13 @@ protocol MathEditingHost: AnyObject {
 
 final class EditorTextView: NSTextView {
     weak var mathHost: MathEditingHost?
+    /// Esc goes here first (to close the find bar); returns whether it was handled.
+    var cancelHandler: (() -> Bool)?
+
+    override func cancelOperation(_ sender: Any?) {
+        if cancelHandler?() == true { return }
+        super.cancelOperation(sender)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()

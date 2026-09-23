@@ -177,12 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    /// The editor's built-in find bar. Each item carries the NSTextFinder action as its
-    /// tag and is sent to the focused text view through the responder chain, which is how
-    /// AppKit's own Find menu is wired.
+    /// Jot's own find bar (see FindBar.swift). Each item carries an NSTextFinder action as
+    /// its tag, the way AppKit's Find menu is wired, and goes up the responder chain to the
+    /// window's editor.
     private func makeFindMenu() -> NSMenu {
         let menu = NSMenu(title: "Find")
-        let findAction = Selector(("performTextFinderAction:"))
+        let findAction = #selector(GlassEditorView.performFindBarAction(_:))
         func add(_ title: String, _ action: NSTextFinder.Action, _ key: String, _ modifiers: NSEvent.ModifierFlags = .command) {
             let item = NSMenuItem(title: title, action: findAction, keyEquivalent: key)
             item.tag = action.rawValue

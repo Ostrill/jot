@@ -25,6 +25,7 @@ Sources/                   ← the application
   Math.swift               ← inline LaTeX: parser, renderer, attachment, preview
   SliderMenuItemView.swift ← labelled slider inside a menu item
   GlassEditorView.swift    ← the per-window editor (glass stack + text layers)
+  FindBar.swift            ← find & replace bar (plain / regex), searched off the main thread
   Document.swift           ← NSDocument + NSWindowController
   AppDelegate.swift        ← menus, app-wide appearance, Rainbow timer
   main.swift               ← entry point
