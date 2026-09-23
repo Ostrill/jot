@@ -84,13 +84,16 @@ final class JotWindowController: NSWindowController {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        // A normal document window: it participates in Spaces / Mission Control (.managed)
-        // and can go full screen. The previous [.fullScreenAuxiliary, .moveToActiveSpace]
-        // was left over from the app's floating-panel days and made the window *unmanaged*
-        // (.managed, .moveToActiveSpace and .canJoinAllSpaces are mutually exclusive), so
-        // the Dock icon wouldn't switch Spaces to it and Mission Control treated it as an
-        // auxiliary panel.
-        window.collectionBehavior = [.managed, .fullScreenPrimary]
+        // A normal document window that participates in Spaces / Mission Control
+        // (.managed). The previous [.fullScreenAuxiliary, .moveToActiveSpace] was left over
+        // from the app's floating-panel days and made the window *unmanaged* (.managed,
+        // .moveToActiveSpace and .canJoinAllSpaces are mutually exclusive), so the Dock icon
+        // couldn't switch Spaces to it.
+        //
+        // No full screen: a full-screen Space has nothing behind the window for the glass to
+        // show, so it just turns into a dark plate. With .fullScreenNone the green button
+        // zooms the window to fill the screen instead — still a window, desktop behind it.
+        window.collectionBehavior = [.managed, .fullScreenNone]
         window.minSize = NSSize(width: 360.0, height: 240.0)
         JotWindowController.installTitlebarToolbar(on: window)
 
@@ -120,13 +123,7 @@ final class JotWindowController: NSWindowController {
         // tracks them. Observe the window directly (NOT as its delegate) so NSDocument
         // keeps ownership of the window's unsaved-changes close review.
         let nc = NotificationCenter.default
-        for name in [NSWindow.didResizeNotification, NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
-            nc.addObserver(self, selector: #selector(reflowTitlebar), name: name, object: window)
-        }
-        nc.addObserver(self, selector: #selector(windowDidEnterFullScreen),
-                       name: NSWindow.didEnterFullScreenNotification, object: window)
-        nc.addObserver(self, selector: #selector(windowDidExitFullScreen),
-                       name: NSWindow.didExitFullScreenNotification, object: window)
+        nc.addObserver(self, selector: #selector(reflowTitlebar), name: NSWindow.didResizeNotification, object: window)
         for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
             nc.addObserver(self, selector: #selector(rememberWindowFrame), name: name, object: window)
         }
@@ -141,24 +138,10 @@ final class JotWindowController: NSWindowController {
     /// lays the traffic lights out lower and inset — clear of the big rounded corner, hover
     /// tracking intact. (A titlebar *accessory* did NOT grow it; and do not use
     /// setFrameOrigin — it desyncs the buttons' hover zones.)
-    ///
-    /// It is removed in full screen, where there are no traffic lights to push down and it
-    /// would only show up as a grey bar across the top.
     private static func installTitlebarToolbar(on window: NSWindow) {
         let toolbar = NSToolbar(identifier: "JotToolbar")
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-    }
-
-    @objc private func windowDidEnterFullScreen() {
-        window?.toolbar = nil
-        editorView.needsLayout = true
-    }
-
-    @objc private func windowDidExitFullScreen() {
-        guard let window else { return }
-        JotWindowController.installTitlebarToolbar(on: window)
-        editorView.needsLayout = true
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -180,7 +163,7 @@ final class JotWindowController: NSWindowController {
     }
 
     @objc private func rememberWindowFrame() {
-        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        guard let window else { return }
         UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: Self.frameDefaultsKey)
     }
 }

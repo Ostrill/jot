@@ -11,8 +11,6 @@ final class GlassEditorView: NSView {
         static let trailingInset: CGFloat = 22.0
         static let editorTopInset: CGFloat = 46.0
         static let titleGapAfterButtons: CGFloat = 90.0
-        /// No titlebar to clear in full screen — just breathing room at the top.
-        static let fullScreenTopInset: CGFloat = 24.0
     }
 
     var settings = PanelSettings() {
@@ -124,8 +122,7 @@ final class GlassEditorView: NSView {
         super.layout()
 
         let titleMetrics = titleBarMetrics()
-        // Each branch of titleBarMetrics applies its own floor — don't re-apply the
-        // windowed one here, or full screen would inherit the titlebar's inset.
+        // Each branch of titleBarMetrics already applies its own floor.
         let topInset = titleMetrics.editorTopInset
         let outerInset: CGFloat = 18.0
         let editorRect = CGRect(
@@ -707,9 +704,7 @@ final class GlassEditorView: NSView {
     }
 
     private func updateChrome() {
-        // Square in full screen: a rounded window filling the display would show black
-        // wedges in the corners.
-        let radius = isFullScreen ? 0.0 : PanelSettings.Fixed.cornerRadius
+        let radius = PanelSettings.Fixed.cornerRadius
         glassView.cornerRadius = radius
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -737,19 +732,7 @@ final class GlassEditorView: NSView {
         needsLayout = true
     }
 
-    /// In full screen there is no titlebar and no traffic lights (macOS reveals them only
-    /// when the pointer goes to the top), so the editor takes the whole height with a
-    /// little breathing room, and the status block sits in the top-right corner.
-    private var isFullScreen: Bool {
-        window?.styleMask.contains(.fullScreen) ?? false
-    }
-
     private func titleBarMetrics() -> (statusOriginY: CGFloat, leadingReserve: CGFloat, editorTopInset: CGFloat) {
-        if isFullScreen {
-            let inset = TitleBarLayout.fullScreenTopInset
-            let statusHeight = fileStatusStack.fittingSize.height
-            return (bounds.height - statusHeight - 8.0, 24.0, inset)
-        }
         guard let window,
               let closeButton = window.standardWindowButton(.closeButton),
               let buttonSuperview = closeButton.superview else {
