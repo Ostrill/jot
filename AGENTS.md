@@ -95,7 +95,15 @@ land in `~/Library/Logs/DiagnosticReports/GlassPanel-*.ips`.
    on every mouse move. In particular:
    - **Assigning `NSTextContainer.size` invalidates the layout of the whole document.**
      Write it only when it actually changes (`syncEditorLayout`), or the following
-     `ensureLayout` re-lays out the entire file.
+     `ensureLayout` re-lays out the entire file. And with word wrap, write exactly the
+     width NSTextView itself would (`wrappingContainerWidth`: its width minus the inset
+     on both sides) — writing any other width starts a tug of war in which the text view
+     puts its own back on every frame change, re-laying out the whole file each time.
+   - After a whole-document re-layout the layout manager finishes in the background and
+     announces every ~50-line chunk as `invalidateDisplay`. The backdrop ignores chunks
+     that are off screen (`BackdropTextView.isOffscreen`); repainting its haloed viewport
+     for each one cost ~1 s of CPU per open/resize in a 4000-line file.
+     `devtools/run.sh typecpu|relayoutcpu` measure these (CPU incl. the aftermath).
    - Rewriting an attribute over the whole storage (the old math highlight) invalidates
      the whole layout with it — repaint only the range whose colour changes.
    - `MathSyntax.completeSpans` walks the document; parse once per reconcile and pass

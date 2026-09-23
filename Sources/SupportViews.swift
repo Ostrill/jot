@@ -126,6 +126,9 @@ final class BackdropTextView: NSView {
     /// points the lines wrap differently and the layers visibly separate.
     weak var mirroredContainer: NSTextContainer?
 
+    /// The characters that were on screen when the view last drew; nil before the first draw.
+    private var visibleCharacterRange: NSRange?
+
     init(sharing storage: NSTextStorage) {
         // The width is mirrored from the editor's container (see mirrorBackdropContainer);
         // tracking a text view would be wrong here — this view is not one.
@@ -134,7 +137,24 @@ final class BackdropTextView: NSView {
         super.init(frame: .zero)
         layoutManager.addTextContainer(textContainer)
         storage.addLayoutManager(layoutManager)
-        layoutManager.onDisplayInvalidated = { [weak self] in self?.needsDisplay = true }
+        layoutManager.onDisplayInvalidated = { [weak self] range in
+            guard let self else { return }
+            if let range, self.isOffscreen(range) { return }
+            self.needsDisplay = true
+        }
+    }
+
+    /// Whether `range` lies wholly above or below what was on screen at the last draw.
+    ///
+    /// After anything that re-lays out the whole document (opening it, resizing, a new
+    /// font size) the layout manager finishes the job in the background, ~50 lines at a
+    /// time, announcing each chunk as a display invalidation — nearly all of them far
+    /// below the viewport. Repainting the haloed viewport for each one cost about a second
+    /// of CPU in a 4000-line document. Skipping them is safe: what is on screen was laid
+    /// out when it was drawn, and a scroll repaints the whole view anyway.
+    private func isOffscreen(_ range: NSRange) -> Bool {
+        guard let visible = visibleCharacterRange, visible.length > 0 else { return false }
+        return NSMaxRange(range) <= visible.location || range.location >= NSMaxRange(visible)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -168,6 +188,11 @@ final class BackdropTextView: NSView {
             forBoundingRect: dirtyRect.offsetBy(dx: -origin.x, dy: -origin.y),
             in: textContainer
         )
+        let visibleGlyphs = layoutManager.glyphRange(
+            forBoundingRect: visibleRect.offsetBy(dx: -origin.x, dy: -origin.y),
+            in: textContainer
+        )
+        visibleCharacterRange = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
         guard glyphRange.length > 0 else { return }
         layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
         layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
@@ -188,21 +213,24 @@ final class BackdropLayoutManager: NSLayoutManager {
     /// AppKit keeps its layer in tiles and any tile that is not explicitly invalidated
     /// keeps pixels drawn under an older layout. That is what made the two text layers
     /// appear doubled, one line apart, further down a scrolled document.
-    var onDisplayInvalidated: (() -> Void)?
+    ///
+    /// The range is passed only for a plain display invalidation, which the view may
+    /// ignore when it is off screen; nil means "redraw, no questions asked".
+    var onDisplayInvalidated: ((NSRange?) -> Void)?
 
     override func invalidateDisplay(forCharacterRange charRange: NSRange) {
         super.invalidateDisplay(forCharacterRange: charRange)
-        onDisplayInvalidated?()
+        onDisplayInvalidated?(charRange)
     }
 
     override func invalidateLayout(forCharacterRange charRange: NSRange, actualCharacterRange: NSRangePointer?) {
         super.invalidateLayout(forCharacterRange: charRange, actualCharacterRange: actualCharacterRange)
-        onDisplayInvalidated?()
+        onDisplayInvalidated?(nil)
     }
 
     override func textContainerChangedGeometry(_ container: NSTextContainer) {
         super.textContainerChangedGeometry(container)
-        onDisplayInvalidated?()
+        onDisplayInvalidated?(nil)
     }
 
     override func processEditing(
@@ -214,7 +242,7 @@ final class BackdropLayoutManager: NSLayoutManager {
     ) {
         super.processEditing(for: textStorage, edited: editMask, range: newCharRange,
                              changeInLength: delta, invalidatedRange: invalidatedCharRange)
-        onDisplayInvalidated?()
+        onDisplayInvalidated?(nil)
     }
 
     override func showCGGlyphs(
