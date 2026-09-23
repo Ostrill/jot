@@ -783,6 +783,35 @@ extension GlassEditorView: NSTextViewDelegate {
         }
     }
 
+    /// AppKit's automatic substitutions follow the user's System Settings, and on a stock
+    /// Mac several of them are on: smart quotes and dashes turn `--` into `–`, spelling
+    /// correction can "fix" a command name like `\\frac`, text replacement can expand a
+    /// shortcut. That's welcome in prose and destructive in LaTeX source, which has to
+    /// reach the file exactly as typed — so they are switched off for any check that
+    /// touches a `$$…$$` span and left alone everywhere else.
+    func textView(
+        _ view: NSTextView,
+        willCheckTextIn range: NSRange,
+        options: [NSSpellChecker.OptionKey: Any] = [:],
+        types checkingTypes: UnsafeMutablePointer<NSTextCheckingTypes>
+    ) -> [NSSpellChecker.OptionKey: Any] {
+        if rangeTouchesFormulaSource(range) {
+            let rewriting: NSTextCheckingResult.CheckingType = [.quote, .dash, .correction, .replacement]
+            checkingTypes.pointee &= ~rewriting.rawValue
+        }
+        return options
+    }
+
+    /// Whether `range` overlaps formula *source*. Rendered formulas are attachments, not
+    /// text, so the only `$$…$$` spans the parser finds are the ones still being edited
+    /// (or all of them, when rendering is switched off).
+    private func rangeTouchesFormulaSource(_ range: NSRange) -> Bool {
+        guard let storage = editorTextView.textStorage else { return false }
+        return MathSyntax.completeSpans(in: storage.string as NSString).contains {
+            NSIntersectionRange($0, range).length > 0 || NSLocationInRange(range.location, $0)
+        }
+    }
+
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         guard !isProcessingMath else { return true }
         // The ONLY automatic behaviour: typing the second "$" of an unescaped "$$"
