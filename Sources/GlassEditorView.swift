@@ -518,7 +518,9 @@ final class GlassEditorView: NSView {
         // Written only when they change: assigning NSTextContainer.size invalidates the
         // layout of the whole document (see syncEditorLayout).
         let containerSize = NSSize(
-            width: appearanceSettings.wordWrap ? max(editorScrollView.contentSize.width, 120.0) : CGFloat.greatestFiniteMagnitude,
+            width: appearanceSettings.wordWrap
+                ? wrappingContainerWidth(forContentWidth: max(editorScrollView.contentSize.width, 120.0))
+                : CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
         if let editorContainer = editorTextView.textContainer {
@@ -586,7 +588,7 @@ final class GlassEditorView: NSView {
         let visibleHeight = max(editorScrollView.contentSize.height, 120.0)
         let contentWidth = settings.wordWrap ? visibleWidth : max(measuredTextWidth(), visibleWidth)
         let containerSize = NSSize(
-            width: settings.wordWrap ? contentWidth : CGFloat.greatestFiniteMagnitude,
+            width: settings.wordWrap ? wrappingContainerWidth(forContentWidth: contentWidth) : CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
 
@@ -621,6 +623,17 @@ final class GlassEditorView: NSView {
         backdropTextView.frame = editorContentView.bounds
         mirrorBackdropContainer()
         invalidateTextLayers()
+    }
+
+    /// The width a wrapping container must have in a text view `contentWidth` wide — the
+    /// same width NSTextView itself gives a container that tracks it: its own width less
+    /// the inset on both sides. Anything else is a tug of war: this code used to write the
+    /// full width, the text view put it back whenever its frame changed, and every flip
+    /// threw away the layout of the whole document in both text layers (~1 s of CPU per
+    /// burst of typing in a 4000-line file, most of it re-drawing the halo). It also let
+    /// lines run 10 pt past the right edge.
+    private func wrappingContainerWidth(forContentWidth contentWidth: CGFloat) -> CGFloat {
+        max(contentWidth - (editorTextView.textContainerInset.width * 2.0), 1.0)
     }
 
     /// The editor's text view owns its container's width — NSTextView keeps it at its own
